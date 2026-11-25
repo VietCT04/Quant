@@ -510,6 +510,7 @@ def generate_catalog(path):
         )
         + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     return output
 
@@ -535,7 +536,7 @@ def generate_api(path):
                 ]
             )
         lines.append("")
-    output.write_text("\n".join(lines), encoding="utf-8")
+    output.write_text("\n".join(lines), encoding="utf-8", newline="\n")
     return output
 
 

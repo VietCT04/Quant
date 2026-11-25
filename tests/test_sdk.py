@@ -704,6 +704,8 @@ def test_experiments_optimization_and_feature_queue(tmp_path):
 
 def test_registry_inventory_and_determinism(tmp_path):
     names = q.registry.list_functions()
+    assert q.registry.describe("quant.math.log")["signature"] == "(x, /)"
+    assert q.registry.describe("quant.math.power")["signature"] == "(x, y, /)"
     assert len(names) == len(set(names))
     assert "quant.ts.ema" in q.registry.list_by_category("ts")
     assert "quant.cs.beta_neutralize" in q.registry.search("beta neutralize")

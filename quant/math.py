@@ -1,6 +1,7 @@
 """Real-valued NumPy transforms and finite-observation reductions."""
 
 import functools
+import inspect
 import warnings
 import numpy as np
 from scipy import stats
@@ -20,6 +21,10 @@ def _transform(function, description):
         return np.where(valid, result, np.nan)
 
     apply.__doc__ = description
+    apply.__signature__ = inspect.Signature(
+        inspect.Parameter(name, inspect.Parameter.POSITIONAL_ONLY)
+        for name in ("x", "y")[: function.nin]
+    )
     return apply
 
 
