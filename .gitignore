@@ -2,6 +2,9 @@
 /.uv-cache/
 /.pytest_cache/
 /.sim-build/
+/build/
+/dist/
+/*.egg-info/
 __pycache__/
 /data/
 /bench-data/

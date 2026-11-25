@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import numpy as np
-import polars as pl
 
 NAMES = ("buy_hold", "scheduled", "ema", "zscore", "random")
 
@@ -38,8 +37,9 @@ class Signals:
         self.n = len(symbols)
         self.native_target = np.full(self.n, notional) if name == "buy_hold" else None
         self.tick = 0
-        self.fast = np.full(self.n, np.nan)
-        self.slow = self.fast.copy()
+        if name == "ema":
+            from quant.ts import EMAState
+            self.averages = [EMAState(span, gap="carry") for span in (60, 240)]
         self.history = [np.empty(0) for _ in symbols]
 
     def apply(self, values, flags):
@@ -51,26 +51,18 @@ class Signals:
             target[due, :] = self.budget * np.array([1.0, 0.5, -1.0, 0.0])[cycle, None]
         elif self.name == "random":
             target[due] = self.generator.integers(-1, 2, (len(due), n)) * self.budget
-        elif self.name in ("ema", "zscore"):
+        elif self.name == "ema":
+            close = np.where(flags <= 1, values[:, :, 0], np.nan)
+            fast, slow = (average.update(close) for average in self.averages)
+            target[due] = np.sign(fast[due] - slow[due]) * self.budget
+        elif self.name == "zscore":
+            from quant.ts import rolling_zscore
             for i in range(n):
                 close = np.where(flags[:, i] <= 1, values[:, i, 0], np.nan)
-                if self.name == "ema":
-                    lines = []
-                    for state, span in ((self.fast, 60), (self.slow, 240)):
-                        x = pl.Series(np.r_[state[i], close]).fill_nan(None)
-                        line = x.ewm_mean(span=span, adjust=False, ignore_nulls=True).forward_fill().to_numpy()[1:]
-                        state[i] = line[-1]
-                        lines.append(line)
-                    a, b = lines
-                    target[due, i] = np.where(np.isfinite(a[due]) & np.isfinite(b[due]),
-                                              np.sign(a[due] - b[due]) * self.budget, np.nan)
-                else:
-                    previous = self.history[i]
-                    series = pl.Series(np.r_[previous, close]).fill_nan(None)
-                    mean = series.rolling_mean(240).to_numpy()[len(previous):]
-                    deviation = series.rolling_std(240).to_numpy()[len(previous):]
-                    z = np.divide(close - mean, deviation, out=np.full(rows, np.nan), where=deviation > 0)
-                    target[due, i] = np.where(z[due] < -2, self.budget,
-                        np.where(z[due] > 2, -self.budget, np.where(np.isfinite(z[due]), 0, np.nan)))
-                    self.history[i] = np.r_[previous, close][-239:]
+                previous = self.history[i]
+                samples = np.r_[previous, close]
+                z = rolling_zscore(samples, 240)[len(previous):][due]
+                target[due, i] = np.where(z < -2, self.budget,
+                    np.where(z > 2, -self.budget, np.where(np.isfinite(z), 0, np.nan)))
+                self.history[i] = samples[-239:]
         self.tick += rows

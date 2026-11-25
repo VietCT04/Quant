@@ -18,7 +18,11 @@ HOLDOUT = "2026-08-25"
 
 
 def backtest(feed, settings, strategy, out):
-    if feed.end > as_millis(HOLDOUT):
+    return _backtest(feed, settings, strategy, out)
+
+
+def _backtest(feed, settings, strategy, out, *, release=None):
+    if feed.end > as_millis(HOLDOUT) and release is None:
         raise ValueError(f"Strategy evaluation must end at or before {HOLDOUT} UTC")
     if (feed.step, feed.lag) != (settings.interval, settings.lag) or not settings.logging:
         raise ValueError("Backtests require logging and the feed's interval and availability lag")
@@ -60,6 +64,8 @@ def backtest(feed, settings, strategy, out):
     }
     summary["input_sha256"] = {key: sha256(path) if path.is_file() else None for key, path in snapshot_paths.items()}
     summary["mark_staleness_ms"] = feed.mark_staleness_ms
+    if release is not None:
+        summary["holdout_release"] = release
     summary["runtime"] = {"elapsed_seconds": perf_counter() - t, "signal_seconds": signal_seconds, "native_seconds": native_seconds}
     write_json(out / "report.json", summary)
     return summary

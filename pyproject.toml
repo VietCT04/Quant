@@ -1,6 +1,6 @@
 [project]
 name = "quant-marketdata"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.12,<3.15"
 dependencies = [
     "aiohttp>=3.13,<4",
@@ -10,13 +10,22 @@ dependencies = [
     "psutil>=7,<8",
     "pyarrow>=21,<26",
     "rich>=14,<16",
+    "scipy>=1.15,<2",
+    "statsmodels>=0.14.5,<1",
 ]
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2"]
 
-[tool.uv]
-package = false
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["quant", "marketdata", "simulator"]
+
+[tool.setuptools.package-data]
+simulator = ["core.cpp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

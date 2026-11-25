@@ -58,14 +58,14 @@ def performance(folder, settings, final, positions, feed):
     returns = np.divide(endpoint[1:], endpoint[:-1],
                         out=np.full(len(endpoint)-1, np.nan), where=endpoint[:-1] > 0) - 1
     complete = returns[np.isfinite(returns)]
-    down = np.minimum(0, complete)
     factors = max((feed.end - feed.start) / DAY, 1 / 86400)
     equity = final["equity"]
     ann = (equity / wallet) ** (365 / factors) - 1 if equity > 0 and factors >= 1 else None
     ret = equity / wallet - 1
     dd = eq["risk_drawdown"].max()
-    sharpe = np.mean(complete) / np.std(complete, ddof=1) * np.sqrt(365) if len(complete) > 1 and np.std(complete, ddof=1) > 0 else None
-    sortino = np.mean(complete) / np.sqrt(np.mean(down**2)) * np.sqrt(365) if len(down) and np.any(down < 0) else None
+    from quant.performance import sharpe as sharpe_ratio, sortino as sortino_ratio
+    sharpe = sharpe_ratio(complete).item() if len(complete) > 1 else None
+    sortino = sortino_ratio(complete).item() if np.any(complete < 0) else None
     closes = pl.scan_parquet(folder / "fills.parquet").filter(pl.col("closed") > 0)
     p = pl.col("closed_net")
     closed = closes.select(
