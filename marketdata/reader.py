@@ -156,6 +156,14 @@ class MarketDataset:
                 result[symbol] = pa.table(aligned)
             yield axis, result
 
+    def iter_symbol_slices(self, symbols, start, end, columns, *, time_steps=4096):
+        """Yield bounded UTC windows of sparse, ordered Arrow tables keyed by symbol."""
+        lo, hi = as_millis(start), as_millis(end)
+        resolved = self._symbols(symbols)
+        if not resolved or time_steps < 1 or lo >= hi or lo % self.interval_ms or hi % self.interval_ms:
+            raise ValueError("Symbol slices require symbols, aligned UTC boundaries and a positive batch size")
+        return self._slices(resolved, lo, hi, columns, time_steps)
+
     def coverage(self, symbols, start, end):
         """Return reported coverage segments. An absent segment is outside published coverage."""
         source = ds.dataset(self.meta / "coverage.parquet", format="parquet")

@@ -1,5 +1,32 @@
 # Binance USD-M pipeline benchmark
 
+## Portfolio simulator V1
+
+Executed on the Windows workspace with Arrow projection, bounded NumPy blocks and the C++20 engine compiled by Zig 0.15.2. Infrastructure runs used zero notional, disabled transaction logging and measured observed rows as well as dense symbol-time slots. The full development interval was November 25, 2024 through August 24, 2026 UTC.
+
+| Input | Observed bars | Native seconds | Native observed bars/s | End-to-end seconds |
+|---|---:|---:|---:|---:|
+| BTC, one day | 17,280 | 0.00066 | 26.0M | 0.109 |
+| Liquid 50, one day | 570,214 | 0.0142 | 40.2M | 1.485 |
+| Liquid 50, June 2025 | 17,102,155 | 0.347 | 49.3M | 8.574 |
+| Liquid 50, full development | 438,350,668 | 6.659 | 65.8M | 219.303 |
+
+The full run processed 551.2 million dense slots, with 212.6 seconds in feed and other overhead and 6.7 seconds in the native path. The entire benchmark suite peaked at 2.01 GB sampled process RSS and averaged 1.54 logical CPU core equivalents. Those timings make feed preparation and reading the main bottleneck. Projected Arrow reads and a minute-grid mark lookup avoid the need for a second full historical cache.
+
+| Reader, Liquid 50 June 2025 | First pass | Immediate reread |
+|---|---:|---:|
+| Raw projected Arrow Parquet scan | 1.638 s | 1.854 s |
+| Chronological sorted Arrow batches | 14.383 s | 13.497 s |
+| Aligned Arrow batches | 8.293 s | 8.884 s |
+
+The OS cache was uncontrolled, so first-pass measurements do not establish cold-cache performance. The isolated in-memory ZSTD test decoded BTC close data at 230 MB/s. That test measures the codec, while the projected Arrow scan includes Parquet decoding. Python EMA computation took 0.628 seconds in the one-day infrastructure benchmark. Four independent one-day replays took 4.952, 3.543 and 3.060 seconds with one, two and four concurrent jobs.
+
+Five strategies and a cost-stress replay ran on all 50 symbols for June 10–16, 2026 UTC. End-to-end times including Parquet logs and analytics ranged from 1.74 to 5.79 seconds. The scheduled strategy and its cost-stress replay produced the same 199,239 fills. The cost-stress assumptions increased modeled fees and execution costs as expected. Fill timestamps, wallet conservation and symbol attribution were independently checked across the six runs. All 25 tests passed. Strategy outputs and the machine-readable benchmark are generated under `data/simulator`.
+
+The auxiliary inputs contain 43,908,251 official mark candles across 1,045 reconciled symbol-months and 129,723 funding records for the 50 contracts. Daily ZIPs supplied missing marks from the monthly archives. The first MMTUSDT funding record carries an unavailable settlement price and is flagged for runs that span that event.
+
+## Historical ingestion
+
 Benchmarked on Windows with 16 logical CPUs, 23.7 GiB of physical RAM and an NTFS workspace drive. Timings include downloads, checksums, ZIP decoding, aggregation, kline comparisons, and Parquet publication. Peak RSS was sampled every 0.5 seconds. Peak temporary bytes are the peak ZIP reservation, excluding existing files outside the benchmark run.
 
 | Sample | ZIP payload | Aggregate records | Bars | Parquet | Wall time | Peak RSS | Peak ZIP reservation |

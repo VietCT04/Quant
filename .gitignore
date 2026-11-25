@@ -1,6 +1,7 @@
 /.venv/
 /.uv-cache/
 /.pytest_cache/
+/.sim-build/
 __pycache__/
 /data/
 /bench-data/

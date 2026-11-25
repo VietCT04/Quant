@@ -1,5 +1,55 @@
 # Binance USD-M historical market data
 
+## Portfolio simulator V1
+
+The simulator streams the audited Liquid 50 Parquet through Arrow and bounded, time-major NumPy blocks. A C++20 engine handles native strategy decisions, market execution and linear futures accounting. Python calls the engine once per block through a C ABI that releases the GIL. The engine uses integer symbol IDs and keeps positions, pending targets, executions and valuation state independent.
+
+```sh
+uv sync --locked
+# Use a C++20 compiler, or install the pinned Windows-compatible toolchain.
+uv pip install ziglang==0.15.2
+uv run python -m simulator.auxiliary
+uv run python -m simulator.auxiliary --repair-marks
+uv run python -m simulator --strategy scheduled --start 2026-06-10 --end 2026-06-17 --out data/simulator/example
+uv run python -m json.tool data/simulator/example/report.json
+uv run python -m simulator.benchmark --out data/simulator/benchmark.json
+uv run pytest -q
+```
+
+Set `CXX` to a C++ compiler command or `QUANT_SIM_LIBRARY` to a prebuilt library. The default compiler path prefers the installed Zig package and caches a source-keyed native binary under `.sim-build`. Acquisition uses the frozen universe and writes funding and mark data beside the trade bars. The downloader resumes from its receipts and uses public data only. [Binance USD-M API](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data) · [Binance public archive](https://data.binance.vision/)
+
+```python
+from marketdata import MarketDataset
+from marketdata.reader import as_millis
+from simulator.__main__ import backtest
+from simulator.feed import MarketDataFeed
+from simulator.native import Settings
+from simulator.strategies import Precomputed
+
+data = MarketDataset("data/binance/um/bars_5s", universe="liquid50")
+feed = MarketDataFeed(data, ["BTCUSDT", "SOLUSDT", "EVAAUSDT"], "2026-06-10", "2026-06-12")
+targets = {"BTCUSDT": 0, "SOLUSDT": 100, "EVAAUSDT": -250}
+signal = Precomputed([as_millis("2026-06-10")], [[targets[s] for s in feed.symbols]])
+backtest(feed, Settings(rebalance_ticks=1, min_adjustment=0), signal, "data/simulator/precomputed")
+```
+
+The target values are signed USDT notionals. A signal row is indexed by the bar's start, becomes usable at that bar's availability timestamp, and is sampled only on configured rebalance ticks. NaN leaves the current target unchanged. Custom signal generation is responsible for using only data available at that timestamp. The supplied `buy_hold` strategy runs in C++. The other built-ins produce bounded arrays in Python. Their names are `scheduled`, `ema`, `zscore`, and `random`. Finite changes in targets can be scaled, sliced using `max_adjustment`, or retried across eligible bars.
+
+### Timing, execution and accounting
+
+- A completed bar becomes visible at its start plus its duration and the reader's lag. The first eligible execution interval starts at or after decision time plus latency. With five-second bars and the 100 ms lag, a decision based on the bar beginning at 00:00:00 is visible at 00:00:05.100. At the default latency the first eligible interval starts at 00:00:10.
+- Market orders use the eligible interval's aggregate-trade VWAP as the modeled execution reference. Participation and impact use that interval's realized base volume. Fills are booked at interval completion plus lag, and funding at or before that booking timestamp applies to the prior position. Spread, slippage and impact are assumptions. Historical bid/ask prices, order book depth and exact fills are unavailable from these bars.
+- Missing, quarantined, pre-listing and synthetic empty intervals have separate data states. Orders wait for a genuine tradable bar. Official mark candle closes become available after the minute closes plus 100 ms. Their default maximum age is one minute. Where a mark is unavailable, the default uses a genuine observed trade close as a marked fallback. During unobservable periods the last price remains only as an explicitly flagged indicative valuation. The engine blocks exposure increases while a held position is unmarked and allows reductions on eligible real bars. Funding events without reliable settlement marks are reported as omissions. An observed event sequence cannot establish that no unobserved funding changes occurred.
+- Wallet balance includes realized PnL, fees and funding. Equity also includes unrealized PnL. Initial margin uses configured leverage and maintenance uses a configurable flat rate. Margin breaches are indicative and do not trigger a modeled Binance liquidation. Current frozen lot and minimum-notional filters are approximate for historical dates. Simultaneous orders compete for capacity in stable feed symbol order. A configured drawdown stop queues flattening instructions at the time the breach is observable.
+
+### Reports and holdout
+
+Each run produces `report.json`, `experiment.json` and Parquet tables for targets, orders, fills, positions, funding and equity. Symbol IDs in logs follow the `symbols` array in the report or row order for the position table. Sharpe and Sortino use UTC daily equity returns, with 365 days per year and zero risk-free rate. Holding-time and win/loss statistics describe closed reductions using average entry age and allocated fees. They differ from marked-to-market portfolio returns, which incorporate open positions and funding. Cost attribution uses modeled execution and exchange fee assumptions.
+
+Strategy runs end by August 25, 2026 UTC, exclusive. August 25 through November 24 is reserved for held-out evaluation. The November 2026 liquidity snapshot still introduces survivorship and historical selection bias. The supplied strategies and cost sensitivity runs verify infrastructure and mechanics.
+
+See [the simulator benchmark](BENCHMARK.md#portfolio-simulator-v1) for measured reader, engine and parallel-run results.
+
 ## Liquid 50 crypto universe
 
 Freeze and download the Liquid 50 from the existing November 25, 2026 snapshot. This adds only the missing crypto contracts to the existing manifest for the original two-year date range. The original universe and TradFi partitions stay available. Binance's asset tags determine eligibility, including crypto-tagged tokens such as PAXG. The frozen ranking records the active-contract selection and uses the October 26 to November 24, 2026 quote volumes. It carries survivorship and historical selection bias for earlier dates.
