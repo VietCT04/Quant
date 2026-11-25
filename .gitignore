@@ -1,0 +1,8 @@
+/.venv/
+/.uv-cache/
+/.pytest_cache/
+__pycache__/
+/data/
+/bench-data/
+/binance-*-raw.json
+*.part
