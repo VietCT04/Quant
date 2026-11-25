@@ -4,7 +4,7 @@
 
 Quant is a quantitative research platform for discovering, testing, rejecting, refining and combining trading hypotheses. The trusted data and accounting layers serve many strategies through a shared research SDK. Correctness, causality and reproducibility take priority over research convenience and speed. Negative trials are durable research results.
 
-The owner authorizes phase transitions, holdout release and any real-capital activity. Phases 1 and 2 are established baselines. Phase 3 delivered the public SDK, with remaining coverage limits recorded below. Phase 4 has not started.
+The owner authorizes phase transitions, holdout release and any real-capital activity. Phases 1 and 2 are established baselines. Phase 3 delivered the public SDK. Phase 4 delivers the high-throughput research engine and supersedes the earlier Phase 2.5 proposal.
 
 ## Completed milestones
 
@@ -33,6 +33,10 @@ Data coverage, manifests and tests remain the evidence for these baselines. Simu
 - Prior ingestion and simulator tests remain green. New public capabilities have independent numerical references and tests for future-input perturbation, gaps, alignment, chunking, and applicable edge cases. Measure hot-path changes on representative workloads.
 
 ## Phase 4 · Research execution infrastructure
+
+**Delivered.** Independent native portfolios advance over shared chronological blocks, with versioned read-only prepared caches, common feature graphs, bounded waves and summary or audit outputs. SQLite retains queued jobs, attempts and outcomes under the existing experiment IDs. Development screening and deterministic recovery are exercised by the [campaign example](docs/RESEARCH_ENGINE.md).
+
+**Verification.** The release passed 88 tests and recovered a development campaign with 108 outcomes. A matched active wave improved end-to-end throughput 8.22×. The warm lightweight full-development replay took 30.161 s using a prepared cache. Direct source preparation and cold builds remain the dominant first-run cost. Benchmarks were run on Windows. [Phase 4 measurements](docs/RESEARCH_BENCHMARKS.md)
 
 **Dependencies.** Accepted SDK contracts, capability registry, reproducible experiments and stable simulator adapters.
 
@@ -92,4 +96,4 @@ Data coverage, manifests and tests remain the evidence for these baselines. Simu
 
 ## Readiness
 
-The audited dataset, native simulator and SDK support development experiments. Phase 4 requires separate authorization. Its prerequisites include explicit resource governance, durable scheduling, and provenance-preserving shared work. The reserved strategy period remains untouched.
+The audited dataset, native simulator and SDK support development campaigns with bounded shared execution and durable outcomes. Any Phase 5 research agent requires separate authorization. The reserved strategy period remains untouched.

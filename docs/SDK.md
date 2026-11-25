@@ -10,7 +10,7 @@ uv run python -m examples.research_sdk all
 uv run pytest -q
 ```
 
-Use the [API reference](API_REFERENCE.md), [function catalog](FUNCTION_CATALOG.json) or `q.registry` for the implemented inventory. The catalog contains 352 entries across 20 modules, including public types and aliases. It identifies 118 streaming entries, including the state methods and block iterators. Regenerate both published inventories with `uv run python -m quant catalog`.
+Use the [API reference](API_REFERENCE.md), [function catalog](FUNCTION_CATALOG.json) or `q.registry` for the current inventory, including public types, aliases and streaming support. Regenerate both published inventories with `uv run python -m quant catalog`. Use the [Phase 4 execution guide](RESEARCH_ENGINE.md) for batch simulation, diagnostics and the durable scheduler.
 
 ## Streaming a simulator experiment
 

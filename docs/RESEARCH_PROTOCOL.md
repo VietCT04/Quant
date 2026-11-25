@@ -10,6 +10,7 @@ Development is [2024-11-25, 2026-08-25) UTC. Final evaluation is reserved for [2
 4. Compare across symbols, periods, regimes, parameters and cost assumptions. Placebos permute joint symbol blocks. Sparse permuted inputs can reduce coverage. The deflated Sharpe utility requires a documented independent-trial count, consistent sampling and a valid independent-return approximation. [Original Deflated Sharpe paper](https://davidhbailey.com/dhbpapers/deflated-sharpe.pdf)
 5. Separate marked portfolio performance and open PnL from closed reductions. Record modeled execution costs, uncertain marking and funding gaps.
 6. Retain negative and failed trials. `q.experiment.reproduce` returns the recorded inputs and provenance. It does not execute scripts stored in SQLite.
+7. Submit predeclared candidate waves through the local scheduler and require a trusted handler to check the saved selection. Treat batched screening as descriptive. Replay a selected native experiment in audit mode using its recorded configuration for detailed decisions and fills. [Research execution guide](RESEARCH_ENGINE.md)
 
 ## Owner-authorized final evaluation
 

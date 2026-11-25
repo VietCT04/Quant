@@ -167,3 +167,7 @@ No secrets in source or logs. Use public historical sources and read-only data a
 - Researchers must leave shared ingestion eligibility, simulator execution/accounting, numerical definitions, risk and cost semantics, holdout gates and evaluation metrics to the reviewed engineering workflow.
 
 See the [SDK guide](docs/SDK.md), [data contract](docs/DATA_CONTRACT.md), [causality contract](docs/CAUSALITY.md), and [benchmarks](docs/BENCHMARKS.md). Run `uv run python -m examples.research_sdk all` for the development examples.
+
+## 13. Research execution
+
+Submit predeclared development experiments through `q.research.submit`. A trusted local handler uses `verify_selection` to bind its source data and returns outcomes by experiment ID. Share causal expressions via `q.evaluate.screen` or `q.simulator.run_batch`, and use a prepared cache only when the disk reservation fits. Screen results are descriptive. Replay selected experiments in audit mode for full accounting artifacts. Keep callback state private and use frozen replay tokens for committed waves. Review the [Phase 4 execution guide](docs/RESEARCH_ENGINE.md) for resource limits, cancellation, and audit procedures.
