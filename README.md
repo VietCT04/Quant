@@ -1,5 +1,18 @@
 # Binance USD-M historical market data
 
+## Quant research SDK
+
+`quant` wraps the audited Liquid 50 dataset and the existing portfolio simulator with aligned causal features, forward-label diagnostics, experiment tracking and capability discovery.
+
+```sh
+uv sync --locked
+uv run python -m quant functions
+uv run python -m quant describe quant.ts.ema
+uv run python -m examples.research_sdk all
+```
+
+See the [SDK quickstart](docs/SDK.md), [research protocol](docs/RESEARCH_PROTOCOL.md), and [Phase 3 benchmarks](docs/BENCHMARKS.md). The examples use development data. The reserved August 25 through November 24, 2026 UTC period requires separately recorded owner authorization for final evaluation.
+
 ## Portfolio simulator V1
 
 The simulator streams the audited Liquid 50 Parquet through Arrow and bounded, time-major NumPy blocks. A C++20 engine handles native strategy decisions, market execution and linear futures accounting. Python calls the engine once per block through a C ABI that releases the GIL. The engine uses integer symbol IDs and keeps positions, pending targets, executions and valuation state independent.
