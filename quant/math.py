@@ -167,10 +167,18 @@ def correlation(x, y, *, axis=0):
     if x.shape != y.shape:
         raise ValueError("Correlation requires paired shapes")
     valid = np.isfinite(x) & np.isfinite(y)
-    x, y = np.where(valid, x, np.nan), np.where(valid, y, np.nan)
-    result = safe_divide(
-        covariance(x, y, axis=axis), std(x, axis=axis) * std(y, axis=axis)
-    )
+    count = valid.sum(axis=axis, keepdims=True)
+    x, y = np.where(valid, x, 0.0), np.where(valid, y, 0.0)
+    mean_x = safe_divide(x.sum(axis=axis, keepdims=True), count)
+    mean_y = safe_divide(y.sum(axis=axis, keepdims=True), count)
+    xc = np.where(valid, x - mean_x, 0.0)
+    yc = np.where(valid, y - mean_y, 0.0)
+    # The sample normalization cancels between covariance and the two standard deviations.
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        result = safe_divide(
+            (xc * yc).sum(axis=axis),
+            np.sqrt((xc * xc).sum(axis=axis)) * np.sqrt((yc * yc).sum(axis=axis)),
+        )
     return np.clip(result, -1, 1)
 
 

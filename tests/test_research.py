@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 from threading import Event
+import warnings
 
 import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
@@ -179,7 +180,7 @@ def test_native_four_column_abi_and_logging_invariance():
 
 
 def test_shared_cache_publication_and_readers(market, tmp_path):
-    from quant._prepared import prepared
+    from quant._prepared import _window, prepared
     from quant.simulator import _feed
 
     cache = tmp_path / "cache"
@@ -201,6 +202,11 @@ def test_shared_cache_publication_and_readers(market, tmp_path):
                 assert_allclose(first, second)
             assert not cached[1].flags.writeable and not cached[2].flags.writeable
     assert not list(cache.rglob(".pending-*"))
+    file = next(cache.rglob("market.npy"))
+    mapped = np.load(file, mmap_mode="r")
+    window = _window((file, mapped.dtype, mapped.shape, mapped.offset), 5, 12)
+    assert not window.flags.writeable
+    assert_allclose(window, mapped[5:12])
     with pytest.raises(MemoryError, match="disk budget"):
         list(prepared(market, _feed(market, 5), tmp_path / "too-small", 1, {}))
 
@@ -349,6 +355,30 @@ def test_consolidated_resume_and_feature_alias(market, tmp_path):
         q.simulator.run_batch(
             market, items, out=out, workers=1, resume_token="different"
         )
+
+
+def test_threaded_correlation_matches_independent_paired_reference():
+    rng = np.random.default_rng(4)
+    x = rng.normal(size=(91, 17))
+    y = 2 * x + rng.normal(size=x.shape)
+    x[::4, 5:] = np.nan
+    y[::3, ::2] = np.nan
+    x[:2] = np.nan
+    x[1, 0] = y[1, 0] = 1.0
+    reference = []
+    for a, b in zip(x, y):
+        valid = np.isfinite(a) & np.isfinite(b)
+        reference.append(
+            np.corrcoef(a[valid], b[valid])[0, 1] if valid.sum() > 1 else np.nan
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        with ThreadPoolExecutor(4) as pool:
+            results = list(
+                pool.map(lambda _: q.math.correlation(x, y, axis=1), range(8))
+            )
+    for result in results:
+        assert_allclose(result, reference, rtol=1e-13)
 
 
 def test_scheduler_recovery_retry_dependencies_and_capability(tmp_path):

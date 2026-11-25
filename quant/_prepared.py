@@ -67,7 +67,33 @@ def _read(folder, feed):
     feed.status_counts[:] = meta["status_counts"]
     feed.mark_missing_slots[:] = meta["mark_missing_slots"]
     feed.funding_warnings = meta["funding_warnings"]
-    return market, flags
+    return tuple(
+        (Path(value.filename), value.dtype, value.shape, value.offset)
+        for value in (market, flags)
+    )
+
+
+def _header(handle, shape, dtype):
+    np.lib.format.write_array_header_2_0(
+        handle,
+        {
+            "shape": shape,
+            "fortran_order": False,
+            "descr": np.lib.format.dtype_to_descr(np.dtype(dtype)),
+        },
+    )
+
+
+def _window(description, lo, hi):
+    path, dtype, shape, offset = description
+    width = int(np.prod(shape[1:])) * dtype.itemsize
+    return np.memmap(
+        path,
+        dtype=dtype,
+        mode="r",
+        offset=offset + lo * width,
+        shape=(hi - lo, *shape[1:]),
+    )
 
 
 @contextmanager
@@ -122,33 +148,23 @@ def prepared(selection, feed, directory, budget, counters, cancel=None):
                 rows = (feed.end - feed.start) // feed.step
                 with tempfile.TemporaryDirectory(dir=root, prefix=".pending-") as stage:
                     folder = Path(stage)
-                    market = np.lib.format.open_memmap(
-                        folder / "market.npy",
-                        mode="w+",
-                        dtype="=f8",
-                        shape=(rows, len(feed.symbols), 4),
-                    )
-                    flags = np.lib.format.open_memmap(
-                        folder / "status.npy",
-                        mode="w+",
-                        dtype="u1",
-                        shape=(rows, len(feed.symbols)),
-                    )
                     cursor = 0
-                    try:
+                    with (
+                        (folder / "market.npy").open("wb", buffering=0) as market,
+                        (folder / "status.npy").open("wb", buffering=0) as flags,
+                    ):
+                        _header(market, (rows, len(feed.symbols), 4), "=f8")
+                        _header(flags, (rows, len(feed.symbols)), "u1")
                         for starts, values, status in feed.blocks(shared=True):
                             if cancel is not None and cancel.is_set():
                                 return
-                            next_row = cursor + len(starts)
-                            market[cursor:next_row], flags[cursor:next_row] = (
-                                values,
-                                status,
-                            )
-                            cursor = next_row
-                        market.flush()
-                        flags.flush()
-                    finally:
-                        del market, flags
+                            if cursor + len(starts) > rows:
+                                raise ValueError(
+                                    "Prepared data exceeds the selected grid"
+                                )
+                            values.tofile(market)
+                            status.tofile(flags)
+                            cursor += len(starts)
                     if cursor != rows:
                         raise ValueError(
                             "Prepared data does not cover the selected grid"
@@ -184,7 +200,18 @@ def prepared(selection, feed, directory, budget, counters, cancel=None):
     market, flags = _read(published, feed)
     counters["cache_reads"] = counters.get("cache_reads", 0) + 1
     counters["cache_hits"] = counters.get("cache_hits", 0) + (not built)
-    for lo in range(0, len(market), feed.block_steps):
-        hi = min(lo + feed.block_steps, len(market))
-        starts = feed.start + np.arange(lo, hi, dtype="i8") * feed.step
-        yield starts, market[lo:hi], flags[lo:hi]
+    rows = market[2][0]
+    # Keep the mapped working set independent of total history, preserving the feed's block edges.
+    block_bytes = feed.block_steps * len(feed.symbols) * 33
+    window_rows = max(1, (64 << 20) // block_bytes) * feed.block_steps
+    for first in range(0, rows, window_rows):
+        last = min(first + window_rows, rows)
+        mapped, coverage = _window(market, first, last), _window(flags, first, last)
+        for lo in range(first, last, feed.block_steps):
+            hi = min(lo + feed.block_steps, last)
+            starts = feed.start + np.arange(lo, hi, dtype="i8") * feed.step
+            yield (
+                starts,
+                mapped[lo - first : hi - first],
+                coverage[lo - first : hi - first],
+            )
