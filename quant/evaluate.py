@@ -352,7 +352,14 @@ def incremental_ic(candidate, controls, labels, *, method="spearman"):
     )
 
 
-__all__ = """forward_returns iter_forward_returns research_values information_coefficient per_symbol_ic cross_sectional_ic icir rolling_ic
+from ._screen import (
+    ScreenCandidate as ScreenCandidate,
+    screen as screen,
+    screen_decay as screen_decay,
+    screen_walk_forward as screen_walk_forward,
+)
+
+__all__ = """screen screen_decay screen_walk_forward forward_returns iter_forward_returns research_values information_coefficient per_symbol_ic cross_sectional_ic icir rolling_ic
 alpha_decay quantile_returns quantile_spread signal_coverage signal_persistence signal_autocorrelation
 signal_turnover conditional_returns event_study long_short_asymmetry regime_performance monthly_stability
 dependent_mean_test adjust_pvalues alpha_correlation incremental_ic""".split()

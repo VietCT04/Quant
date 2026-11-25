@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 #ifdef _WIN32
@@ -26,6 +27,7 @@ struct Config {
 
 struct Rule { double step, minimum; };
 struct Bar { double close, execution, volume, mark, target; };
+struct Market { double close, execution, volume, mark; };
 struct Settlement { Time ms, symbol; double rate, price; };
 struct Order {
     Time ms, bar_start, decision, symbol, reason;
@@ -39,6 +41,7 @@ struct Equity {
     double wallet, realized, unrealized, equity, gross, net, initial, maintenance, available;
     double fees, slippage, funding, turnover, risk_drawdown;
 };
+struct RiskSummary { Time maintenance_ticks, uncertain_ticks, suspended_ticks; double peak_gross; };
 struct Position {
     double qty = 0, entry = 0, mark = unset, target = unset, entry_clock = 0, entry_fees = 0;
     double realized = 0, fees = 0, slippage = 0, funding = 0, turnover = 0;
@@ -59,13 +62,13 @@ struct PositionView {
 class Strategy {
 public:
     virtual ~Strategy() = default;
-    virtual double target(std::size_t symbol, Time decision, const Bar& bar, bool has_target) const = 0;
+    virtual double target(std::size_t symbol, bool has_target) const = 0;
 };
 class BuyAndHold final : public Strategy {
     std::vector<double> allocations;
 public:
     BuyAndHold(const double* values, std::size_t n) : allocations(values, values + n) {}
-    double target(std::size_t symbol, Time, const Bar&, bool has_target) const override {
+    double target(std::size_t symbol, bool has_target) const override {
         return has_target ? unset : allocations[symbol];
     }
 };
@@ -77,6 +80,7 @@ class Engine {
     std::vector<unsigned char> fresh;
     BuyAndHold* native = nullptr;
     Equity current{};
+    RiskSummary risk{};
     double peak, wallet, fees = 0, slippage = 0, realized = 0, funding = 0, turnover = 0, worst_dd = 0;
     Time count = 0, last = -1;
     bool suspended = false;
@@ -91,6 +95,7 @@ public:
     }
     ~Engine() { delete native; }
     Equity final() const { return current; }
+    RiskSummary risk_summary() const { return risk; }
     void positions(PositionView* out) const {
         for (std::size_t i = 0; i < book.size(); ++i) {
             const auto& p = book[i];
@@ -109,9 +114,10 @@ public:
         funding += cash;
         p.funding += cash;
         (p.qty > 0 ? p.long_funding : p.short_funding) += cash;
-        if (cfg.logging) cashflows.push_back({f.ms, f.symbol, p.qty, f.price, f.rate, cash});
+        if (cfg.logging == 1) cashflows.push_back({f.ms, f.symbol, p.qty, f.price, f.rate, cash});
     }
-    void adjust(std::size_t i, const Bar& b, Time start, Time now, double& gross, double& upnl, Time& active, Time uncertain) {
+    template<class Input>
+    void adjust(std::size_t i, const Input& b, Time start, Time now, double& gross, double& upnl, Time& active, Time uncertain) {
         auto& p = book[i];
         const auto& rule = rules[i];
         double ref = b.execution;
@@ -146,7 +152,7 @@ public:
             log.reason = reducing + add <= epsilon ? 2 : 3;
             if (std::abs(wanted) < rule.step || (reducing == 0 && std::abs(wanted) * ref < rule.minimum))
                 p.pending = false;
-            if (cfg.logging) orders.push_back(log);
+            if (cfg.logging == 1) orders.push_back(log);
             return;
         }
         double delta = std::copysign(amount, wanted);
@@ -155,7 +161,7 @@ public:
         double cost_bps = cfg.spread_bps / 2 + cfg.slippage_bps
                         + cfg.impact_bps * std::sqrt(amount / b.volume);
         double fill = ref * (1 + std::copysign(cost_bps / 10000, delta));
-        if (!price_ok(fill)) { log.reason = 3; if (cfg.logging) orders.push_back(log); return; }
+        if (!price_ok(fill)) { log.reason = 3; if (cfg.logging == 1) orders.push_back(log); return; }
         double execution_cost = amount * std::abs(fill - ref);
         double fee = amount * fill * cfg.fee_bps / 10000;
         // Risk-reducing trades can finish during a margin breach. Avoid adding
@@ -163,7 +169,7 @@ public:
         if (opened > epsilon && (other + std::abs((old + delta) * mark) >
                 std::max(0.0, equity - fee + delta * (mark - fill)) * std::min(cfg.leverage, cfg.max_gross_leverage) + epsilon)) {
             log.reason = 2;
-            if (cfg.logging) orders.push_back(log);
+            if (cfg.logging == 1) orders.push_back(log);
             return;
         }
         double pnl = closed * (fill - p.entry) * (old >= 0 ? 1 : -1);
@@ -199,7 +205,7 @@ public:
         gross = other + std::abs(p.qty * mark);
         upnl += p.qty * (mark - p.entry) - old_unrealized;
         if (abs_wanted - amount <= epsilon) p.pending = false;
-        if (cfg.logging) {
+        if (cfg.logging == 1) {
             log.reason = p.pending ? 1 : 0;
             log.filled = delta; log.price = fill; log.fee = fee; log.slippage = execution_cost;
             log.realized = pnl; log.closed = closed; log.closed_net = pnl - entry_fee - fee * closed / amount;
@@ -207,8 +213,9 @@ public:
             orders.push_back(log);
         }
     }
-    void run(const Time* starts, const Bar* values, const unsigned char* status, std::size_t ticks,
-             const Settlement* settlement, std::size_t funding_count) {
+    template<class Input>
+    void run(const Time* starts, const Input* values, const unsigned char* status, std::size_t ticks,
+             const Settlement* settlement, std::size_t funding_count, const double* requested_targets = nullptr) {
         orders.clear(); cashflows.clear(); targets.clear(); curve.clear();
         const auto n = book.size();
         std::size_t next_funding = 0;
@@ -252,24 +259,33 @@ public:
             const double dd = peak > 0 ? (peak - equity) / peak : 0;
             worst_dd = std::max(worst_dd, dd);
             if (cfg.drawdown_limit > 0 && dd >= cfg.drawdown_limit) suspended = true;
+            risk.peak_gross = std::max(risk.peak_gross, gross);
+            risk.maintenance_ticks += equity < gross * cfg.maintenance_rate;
+            risk.uncertain_ticks += uncertain != 0;
+            risk.suspended_ticks += suspended;
             const bool rebalance = count % cfg.rebalance_ticks == 0;
             if (rebalance || suspended) for (std::size_t i = 0; i < n; ++i) {
                 auto& p = book[i];
                 if (suspended) {
                     if (p.qty && (!p.pending || p.target != 0)) {
                         p.pending = true; p.target = 0; p.decision = now;
-                        if (cfg.logging) targets.push_back({now, static_cast<Time>(i), 0});
+                        if (cfg.logging == 1) targets.push_back({now, static_cast<Time>(i), 0});
                     }
                     continue;
                 }
                 if (!rebalance || flags[i] >= 2) continue;
-                double requested = native ? native->target(i, now, row[i], std::isfinite(p.target)) : row[i].target;
+                double requested = unset;
+                if (native) requested = native->target(i, std::isfinite(p.target));
+                else if constexpr (std::is_same_v<Input, Bar>) requested = row[i].target;
+                else if (requested_targets) requested = requested_targets[j*n+i];
                 if (std::isfinite(requested) && (!p.pending || requested != p.target)) {
                     p.target = requested; p.decision = now; p.pending = true;
-                    if (cfg.logging) targets.push_back({now, static_cast<Time>(i), requested});
+                    if (cfg.logging == 1) targets.push_back({now, static_cast<Time>(i), requested});
                 }
             }
-            if (count % cfg.snapshot_ticks == 0 || (start + cfg.interval) % 86400000 == 0 || j + 1 == ticks) {
+            const bool daily = (start + cfg.interval) % 86400000 == 0;
+            const bool block_end = j + 1 == ticks;
+            if ((cfg.logging != 2 && count % cfg.snapshot_ticks == 0) || daily || block_end) {
                 double net = 0;
                 for (const auto& p : book) if (p.qty) net += p.qty * p.mark;
                 double im = gross / cfg.leverage, mm = gross * cfg.maintenance_rate;
@@ -291,6 +307,12 @@ EXPORTED int sim_run(Engine* sim, const Time* ts, const Bar* bars, const unsigne
                      const Settlement* funding, std::size_t funding_count) {
     try { sim->run(ts, bars, status, n, funding, funding_count); return 0; } catch (...) { return -1; }
 }
+EXPORTED int sim_run_shared(Engine* sim, const Time* ts, const Market* bars, const unsigned char* status,
+                            std::size_t n, const Settlement* funding, std::size_t funding_count,
+                            const double* targets) {
+    try { sim->run(ts, bars, status, n, funding, funding_count, targets); return 0; } catch (...) { return -1; }
+}
+EXPORTED void sim_risk(Engine* sim, RiskSummary* out) { *out = sim->risk_summary(); }
 EXPORTED const Order* sim_orders(Engine* sim, std::size_t* n) { *n = sim->orders.size(); return sim->orders.data(); }
 EXPORTED const Cashflow* sim_cashflows(Engine* sim, std::size_t* n) { *n = sim->cashflows.size(); return sim->cashflows.data(); }
 EXPORTED const Target* sim_targets(Engine* sim, std::size_t* n) { *n = sim->targets.size(); return sim->targets.data(); }

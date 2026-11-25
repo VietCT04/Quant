@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from time import perf_counter
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -46,6 +47,8 @@ class MarketDataFeed:
         if not self.symbols or self.start >= self.end or self.start % self.step or self.end % self.step:
             raise ValueError("A nonempty universe and interval-aligned UTC range are required")
         self.block_steps = block_steps
+        self.read_threads = True
+        self.profile = dict(parquet_and_slicing_seconds=0., alignment_and_marks_seconds=0.)
         if mark_staleness_ms < 1:
             raise ValueError("Mark staleness limit must be positive")
         self.mark_staleness_ms = mark_staleness_ms
@@ -114,14 +117,25 @@ class MarketDataFeed:
             first = next_month(first)
 
     def __iter__(self):
-        for lo, hi, samples in self.dataset.iter_symbol_slices(self.symbols, self.start, self.end, FIELDS,
-                                                               time_steps=self.block_steps):
+        return self.blocks()
+
+    def blocks(self, *, shared=False):
+        source = self.dataset.iter_symbol_slices(self.symbols, self.start, self.end, FIELDS,
+                                                 time_steps=self.block_steps, use_threads=self.read_threads)
+        while True:
+            now = perf_counter()
+            piece = next(source, None)
+            self.profile["parquet_and_slicing_seconds"] += perf_counter() - now
+            if piece is None:
+                break
+            lo, hi, samples = piece
+            now = perf_counter()
             starts = np.arange(lo, hi, self.step, dtype="i8")
             clock = starts + self.step + self.lag
             clock_minute = (clock - 100) // MINUTE
             minute_keys = (np.arange(clock_minute[0], clock_minute[-1] + 1) * MINUTE) + 100
             minute_index = clock_minute - clock_minute[0]
-            values = np.full((len(starts), len(self.symbols), 5), np.nan)
+            values = np.full((len(starts), len(self.symbols), 4 if shared else 5), np.nan)
             flags = np.full(values.shape[:2], MISSING, dtype="u1")
             for i, (symbol, table) in enumerate(samples.items()):
                 intervals = self.quarantine[i]
@@ -142,4 +156,5 @@ class MarketDataFeed:
                 values[state == PRELISTING, i, 3] = np.nan
                 self.mark_missing_slots[i] += np.count_nonzero(~np.isfinite(values[:, i, 3]) & (state != PRELISTING))
                 self.status_counts[:, i] += np.bincount(state, minlength=5)
+            self.profile["alignment_and_marks_seconds"] += perf_counter() - now
             yield starts, values, flags

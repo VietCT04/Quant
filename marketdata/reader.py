@@ -73,13 +73,13 @@ class MarketDataset:
                 yield target
             current = next_month(current)
 
-    def _scan(self, symbol, lo, hi, internal, num_rows):
+    def _scan(self, symbol, lo, hi, internal, num_rows, use_threads=True):
         columns = [f for f in internal if f not in {"symbol", "available_at_ms"}]
         for path in self._paths(symbol, lo, hi):
             source = ds.dataset(path, format="parquet")
             predicate = (ds.field("timestamp_ms") >= lo) & (ds.field("timestamp_ms") < hi)
             for batch in source.to_batches(columns=columns, filter=predicate,
-                                           batch_size=num_rows, use_threads=True, batch_readahead=1):
+                                           batch_size=num_rows, use_threads=use_threads, batch_readahead=1):
                 if not batch.num_rows:
                     continue
                 data = {name: batch[name] for name in columns}
@@ -89,9 +89,9 @@ class MarketDataset:
                     data["available_at_ms"] = pc.add(batch["timestamp_ms"], self.interval_ms + self.availability_lag_ms)
                 yield pa.record_batch(data)
 
-    def _slices(self, symbols, lo, hi, columns, steps):
+    def _slices(self, symbols, lo, hi, columns, steps, use_threads=True):
         internal = list(dict.fromkeys(["timestamp_ms", *columns]))
-        streams = {s: iter(self._scan(s, lo, hi, internal, max(steps, 4096))) for s in symbols}
+        streams = {s: iter(self._scan(s, lo, hi, internal, max(steps, 4096), use_threads)) for s in symbols}
         current = {s: next(stream, None) for s, stream in streams.items()}
         for start in range(lo, hi, steps * self.interval_ms):
             end = min(hi, start + steps * self.interval_ms)
@@ -156,13 +156,13 @@ class MarketDataset:
                 result[symbol] = pa.table(aligned)
             yield axis, result
 
-    def iter_symbol_slices(self, symbols, start, end, columns, *, time_steps=4096):
+    def iter_symbol_slices(self, symbols, start, end, columns, *, time_steps=4096, use_threads=True):
         """Yield bounded UTC windows of sparse, ordered Arrow tables keyed by symbol."""
         lo, hi = as_millis(start), as_millis(end)
         resolved = self._symbols(symbols)
         if not resolved or time_steps < 1 or lo >= hi or lo % self.interval_ms or hi % self.interval_ms:
             raise ValueError("Symbol slices require symbols, aligned UTC boundaries and a positive batch size")
-        return self._slices(resolved, lo, hi, columns, time_steps)
+        return self._slices(resolved, lo, hi, columns, time_steps, use_threads)
 
     def coverage(self, symbols, start, end):
         """Return reported coverage segments. An absent segment is outside published coverage."""

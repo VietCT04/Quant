@@ -33,7 +33,7 @@ class Feature:
 
 def expression(name, *inputs, units, **parameters):
     """Build a lazy expression from a registered causal function or a bound special kernel."""
-    from .registry import describe
+    from .registry import describe, resolve
 
     info = describe(name)
     if info["causality"] != "causal" or info["streaming"] not in _FEATURE_KERNELS:
@@ -42,6 +42,13 @@ def expression(name, *inputs, units, **parameters):
         raise TypeError("Feature inputs must be field names or nested expressions")
     if not units:
         raise ValueError("An output unit is required")
+    function = resolve(name)
+    canonical = f"{function.__module__}.{function.__name__}"
+    try:
+        if resolve(canonical) is function:
+            name = canonical
+    except KeyError:
+        pass
     return Feature(name, tuple(inputs), _json(parameters), units)
 
 
@@ -168,6 +175,31 @@ def _digest(arrays):
     return h.hexdigest()
 
 
+def plan(expressions):
+    """Return the unique feature graph in dependency order with one node per expression identity."""
+    from .registry import describe, resolve
+
+    nodes = {}
+
+    def visit(node):
+        if isinstance(node, str) or node in nodes:
+            return
+        if not isinstance(node, Feature):
+            raise TypeError("Expected a feature expression or field name")
+        for dependency in node.inputs:
+            visit(dependency)
+        info = describe(node.name)
+        if info["causality"] != "causal" or info["streaming"] not in _FEATURE_KERNELS:
+            raise MissingCapabilityError(node.name, ("causal streaming kernel",))
+        nodes[node] = (resolve(node.name), info, json.loads(node.parameters_json))
+
+    for node in expressions.values():
+        if not isinstance(node, Feature):
+            raise TypeError("Output definitions must be Feature expressions")
+        visit(node)
+    return nodes
+
+
 def evaluate(
     blocks,
     expressions,
@@ -176,10 +208,10 @@ def evaluate(
     fingerprint=None,
     context=None,
     memory_bytes=256 << 20,
+    on_error=None,
 ):
     """Evaluate registered streaming expressions once per distinct input and block."""
     from . import ts
-    from .registry import describe, resolve
     from ._core import bars
 
     expressions = dict(expressions)
@@ -189,7 +221,9 @@ def evaluate(
         raise ValueError("A cache requires an explicit dataset fingerprint")
     if memory_bytes < 1:
         raise ValueError("Feature memory budget must be positive")
+    graph = plan(expressions)
     states = {}
+    failed = set()
     previous = None
     for block in blocks:
         if not isinstance(block, Block) or not len(block.timestamps_ms):
@@ -205,22 +239,16 @@ def evaluate(
         previous = (block.timestamps_ms[-1], block.symbols, block.interval_ms)
         computed = {}
 
-        def apply(node):
+        def compute(node):
             if isinstance(node, str):
                 if node not in block.values:
                     raise MissingCapabilityError("feature input", (node,))
                 return block.values[node]
             if node in computed:
                 return computed[node]
-            info = describe(node.name)
-            if (
-                info["causality"] != "causal"
-                or info["streaming"] not in _FEATURE_KERNELS
-            ):
-                raise MissingCapabilityError(node.name, ("causal streaming kernel",))
             args = [apply(n) for n in node.inputs]
-            parameters = json.loads(node.parameters_json)
-            function = resolve(node.name)
+            function, info, parameters = graph[node]
+            parameters = dict(parameters)
             state_bytes = sum(
                 part.nbytes
                 for state in states.values()
@@ -303,15 +331,38 @@ def evaluate(
                     result = array(function(*combined, **parameters))[
                         -len(block.timestamps_ms) :
                     ]
-                    if key is not None:
+                    if key is not None and np.shape(result) == block.status.shape:
                         cache.put(key, result)
+            if np.shape(result) != block.status.shape:
+                raise ValueError("Feature output must match the source block axes")
             computed[node] = result
             return result
 
-        values = {
-            name: np.where(block.status <= 1, apply(node), np.nan)
-            for name, node in expressions.items()
-        }
+        def apply(node):
+            if node in failed:
+                raise ValueError(f"Feature dependency failed: {node.name}")
+            try:
+                return compute(node)
+            except Exception as error:
+                if on_error is not None and node in graph:
+                    failed.add(node)
+                    states.pop(node, None)
+                    on_error(node, error)
+                raise
+
+        valid = block.status <= 1
+        outputs = {}
+        for node in dict.fromkeys(expressions.values()):
+            try:
+                value = apply(node)
+                masked = np.where(valid, value, np.nan)
+            except Exception:
+                if on_error is None:
+                    raise
+                masked = np.full(block.status.shape, np.nan)
+            masked.flags.writeable = False
+            outputs[node] = masked
+        values = {name: outputs[node] for name, node in expressions.items()}
         yield Block(
             block.timestamps_ms,
             block.symbols,
@@ -324,4 +375,4 @@ def evaluate(
         )
 
 
-__all__ = ["expression", "cache_key", "evaluate"]
+__all__ = ["expression", "cache_key", "plan", "evaluate"]

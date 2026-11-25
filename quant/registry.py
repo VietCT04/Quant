@@ -45,8 +45,15 @@ _RECURSIVE = {"ema", "ewma", "exponential_decay", "wilder"}
 _TYPES = {
     "ts": ("EMAState", "EMAState.update", "WilderState", "WilderState.update"),
     "data": ("Selection", "Block"),
-    "evaluate": ("Labels",),
-    "simulator": ("Targets", "Result", "Result.table", "Result.iter_batches"),
+    "evaluate": ("Labels", "ScreenCandidate"),
+    "simulator": (
+        "Targets",
+        "Result",
+        "Result.table",
+        "Result.iter_batches",
+        "Candidate",
+        "BatchResult",
+    ),
     "features": ("Cache", "Cache.get", "Cache.put", "Feature"),
     "stats": ("Regression",),
     "requests": ("Request",),
@@ -177,6 +184,9 @@ _EXAMPLES = {
     "ts.rolling_mean": "q.ts.rolling_mean([1., 2., 3.], 2)",
 }
 _RESEARCH_TAINT = {
+    "screen",
+    "screen_decay",
+    "screen_walk_forward",
     "forward_returns",
     "iter_forward_returns",
     "research_values",
@@ -285,6 +295,13 @@ def _describe(name, function):
         ("simulator", "Result.iter_batches"),
     }:
         streaming = "block-iterator"
+    if (category, short) in {
+        ("simulator", "run_batch"),
+        ("evaluate", "screen"),
+        ("evaluate", "screen_decay"),
+        ("evaluate", "screen_walk_forward"),
+    }:
+        streaming = "block-processing"
     definition = doc
     if function is resolve("quant.ts.ema"):
         definition = "EMA[t] = alpha*x[t] + (1-alpha)*EMA[t-1], alpha=2/(span+1); first finite value seeds state."

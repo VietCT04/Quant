@@ -40,9 +40,21 @@ def random_search(distributions, *, trials, seed=0, constraint=None, max_attempt
     raise ValueError("Candidate constraint exhausted the attempt budget")
 
 
-def parallel(execute, candidates, *, workers=1, backend="process"):
+def parallel(
+    execute,
+    candidates,
+    *,
+    workers=1,
+    backend="process",
+    cpu_limit=None,
+    queue_depth=None,
+):
     """Run independent experiments in stable order with bounded pending submissions."""
-    if workers < 1 or backend not in {"process", "thread"}:
+    from ._resources import worker_count
+
+    workers = worker_count(workers, cpu_limit=cpu_limit)
+    depth = 2 * workers if queue_depth is None else queue_depth
+    if type(depth) is not int or depth < 1 or backend not in {"process", "thread"}:
         raise ValueError("Choose positive worker count and a process or thread backend")
     if workers == 1:
         yield from map(execute, candidates)
@@ -50,7 +62,7 @@ def parallel(execute, candidates, *, workers=1, backend="process"):
     kind = ProcessPoolExecutor if backend == "process" else ThreadPoolExecutor
     with kind(max_workers=workers) as pool:
         stream = iter(candidates)
-        pending = deque(pool.submit(execute, c) for c in islice(stream, 2 * workers))
+        pending = deque(pool.submit(execute, c) for c in islice(stream, depth))
         for item in stream:
             yield pending.popleft().result()
             pending.append(pool.submit(execute, item))

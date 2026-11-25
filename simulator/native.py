@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from threading import Lock
 from dataclasses import dataclass, fields
 
 import numpy as np
@@ -54,7 +55,7 @@ class Settings:
                 raise ValueError(f"{name} must be an integer")
         if (not 0 < self.participation <= 1 or not 0 <= self.drawdown_limit <= 1 or
             not self.initial_wallet or self.leverage < 1 or not self.interval or
-            not self.rebalance_ticks or not self.snapshot_ticks or self.fee_bps >= 10000 or
+            not self.rebalance_ticks or not self.snapshot_ticks or self.logging not in (0, 1, 2) or self.fee_bps >= 10000 or
             self.spread_bps / 2 + self.slippage_bps + self.impact_bps >= 10000):
             raise ValueError("Invalid interval, leverage, participation, costs or drawdown settings")
 
@@ -78,8 +79,10 @@ POSITION = dtype(
     "", "qty entry mark target realized unrealized fees slippage funding turnover long_realized short_realized "
         "long_cost short_cost long_funding short_funding long_fee short_fee")
 POSITION = np.dtype(POSITION.descr + dtype("gap_ticks held_unmarked_ticks fallback_ticks orders fills", "").descr)
+RISK = dtype("maintenance_ticks uncertain_ticks suspended_ticks", "peak_gross")
 
 _LIB = None
+_LOAD_LOCK = Lock()
 
 
 def build():
@@ -109,6 +112,11 @@ def build():
 
 
 def library():
+    with _LOAD_LOCK:
+        return _library()
+
+
+def _library():
     global _LIB
     if _LIB is None:
         lib = ct.CDLL(str(build()))
@@ -116,6 +124,10 @@ def library():
         lib.sim_create.argtypes, lib.sim_create.restype = [ct.POINTER(_Config), ptr, size, ptr], ptr
         lib.sim_delete.argtypes, lib.sim_delete.restype = [ptr], None
         lib.sim_run.argtypes, lib.sim_run.restype = [ptr, ptr, ptr, ptr, size, ptr, size], ct.c_int
+        if hasattr(lib, "sim_run_shared"):
+            lib.sim_run_shared.argtypes = [ptr, ptr, ptr, ptr, size, ptr, size, ptr]
+            lib.sim_run_shared.restype = ct.c_int
+            lib.sim_risk.argtypes, lib.sim_risk.restype = [ptr, ptr], None
         for f in ("orders", "cashflows", "targets", "curve"):
             func = getattr(lib, "sim_" + f)
             func.argtypes, func.restype = [ptr, ct.POINTER(size)], ptr
@@ -161,12 +173,21 @@ class Engine:
         self.close()
 
     def run(self, starts, values, status, settlements=None):
+        self._run(starts, values, status, settlements, shared=False)
+
+    def run_shared(self, starts, values, status, settlements=None, *, targets=None):
+        """Advance one portfolio with immutable four-column market data and separate targets."""
+        if not hasattr(self.lib, "sim_run_shared"):
+            raise RuntimeError("The shared simulator requires the current native library")
+        self._run(starts, values, status, settlements, shared=True, targets=targets)
+
+    def _run(self, starts, values, status, settlements, *, shared, targets=None):
         if not self.handle:
             raise RuntimeError("Simulator is closed")
         starts = np.ascontiguousarray(starts, dtype="=i8")
         values = np.ascontiguousarray(values, dtype="=f8")
         status = np.ascontiguousarray(status, dtype="u1")
-        if starts.ndim != 1 or not len(starts) or values.shape != (len(starts), self.n, 5) or status.shape != values.shape[:2]:
+        if starts.ndim != 1 or not len(starts) or values.shape != (len(starts), self.n, 4 if shared else 5) or status.shape != values.shape[:2]:
             raise ValueError("mismatched input block shapes")
         if np.any(np.diff(starts) <= 0) or self.last_time is not None and starts[0] <= self.last_time:
             raise ValueError("Nonchronological bar stream")
@@ -179,8 +200,16 @@ class Engine:
                 or not np.isfinite(funding["rate"]).all() or not np.isfinite(funding["price"]).all()
                 or np.any(funding["price"] <= 0)):
             raise ValueError("Invalid, repeated, unsorted, or future settlement events")
-        rc = self.lib.sim_run(self.handle, starts.ctypes.data, values.ctypes.data, status.ctypes.data,
-                              len(starts), funding.ctypes.data, len(funding))
+        args = (self.handle, starts.ctypes.data, values.ctypes.data, status.ctypes.data,
+                len(starts), funding.ctypes.data, len(funding))
+        if shared:
+            if targets is not None:
+                targets = np.ascontiguousarray(targets, dtype="=f8")
+                if targets.shape != status.shape:
+                    raise ValueError("Target axes must match the shared input")
+            rc = self.lib.sim_run_shared(*args, None if targets is None else targets.ctypes.data)
+        else:
+            rc = self.lib.sim_run(*args)
         if rc:
             self.close()
             raise RuntimeError("Native simulator rejected the block")
@@ -220,3 +249,10 @@ class Engine:
         out = np.empty(self.n, dtype=POSITION)
         self.lib.sim_positions(self.handle, out.ctypes.data)
         return out
+
+    def risk(self):
+        if not self.handle or not hasattr(self.lib, "sim_risk"):
+            raise RuntimeError("Risk summary requires an open current native library")
+        out = np.empty(1, dtype=RISK)
+        self.lib.sim_risk(self.handle, out.ctypes.data)
+        return out[0]

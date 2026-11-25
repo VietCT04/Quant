@@ -93,6 +93,41 @@ def register(
     candidate_count=1,
 ):
     """Record a development experiment and complete provenance before inspecting its result."""
+    spec = _spec(
+        hypothesis,
+        parameters,
+        start,
+        end,
+        universe,
+        dataset_fingerprint,
+        seed,
+        features,
+        evaluation,
+        costs,
+        candidate_count,
+    )
+    experiment_id = uuid4().hex
+    with closing(connect(path)) as conn, conn:
+        conn.execute(
+            "INSERT INTO experiments VALUES (?,?,?,?,?,NULL)",
+            (experiment_id, _now(), "pending", hypothesis, _dump(spec)),
+        )
+    return experiment_id
+
+
+def _spec(
+    hypothesis,
+    parameters,
+    start,
+    end,
+    universe,
+    dataset_fingerprint,
+    seed,
+    features,
+    evaluation,
+    costs,
+    candidate_count,
+):
     lo, hi = _check(start, end)
     if (
         not hypothesis.strip()
@@ -104,11 +139,10 @@ def register(
         raise ValueError(
             "Hypothesis, universe, fingerprint, integer seed and trial count are required"
         )
-    from pathlib import Path
     from marketdata.model import sha256
 
     simulator = Path(__file__).resolve().parent.parent / "simulator" / "core.cpp"
-    spec = dict(
+    return dict(
         parameters=parameters,
         start_ms=lo,
         end_ms=hi,
@@ -123,13 +157,6 @@ def register(
         simulator_version=sha256(simulator) if simulator.is_file() else None,
         git=_git(),
     )
-    experiment_id = uuid4().hex
-    with closing(connect(path)) as conn, conn:
-        conn.execute(
-            "INSERT INTO experiments VALUES (?,?,?,?,?,NULL)",
-            (experiment_id, _now(), "pending", hypothesis, _dump(spec)),
-        )
-    return experiment_id
 
 
 def finish(

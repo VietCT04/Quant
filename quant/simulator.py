@@ -64,6 +64,7 @@ class Result:
 
     directory: Path
     report: dict
+    report_path: Path | None = None
 
     def table(self, name, *, columns=None):
         """Read one of the native simulator report tables, with optional column projection."""
@@ -232,4 +233,10 @@ def final_run(data, targets, config, *, out, release_path, block_steps=4096):
     return Result(destination, report)
 
 
-__all__ = ["targets", "run", "target_digest", "final_run"]
+from ._batch import (
+    BatchResult as BatchResult,
+    Candidate as Candidate,
+    run_batch as run_batch,
+)
+
+__all__ = ["targets", "run", "target_digest", "final_run", "run_batch"]
