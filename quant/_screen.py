@@ -157,6 +157,8 @@ def screen(
         source_and_features_seconds=0.0,
         diagnostics_seconds=0.0,
     )
+    removed = getattr(cancel, "cancelled", None)
+    progress = getattr(cancel, "progress", None)
     with ThreadPoolExecutor(max_workers=count) as pool:
         for offset in range(0, len(candidates), batch_size):
             wave = candidates[offset : offset + batch_size]
@@ -183,8 +185,9 @@ def screen(
 
             def source():
                 nonlocal base
-                for base in market.iter_blocks(
-                    selection, block_steps=steps, decoded_cache=decoded_cache
+                for base in market._iter_blocks(
+                    selection, steps, min(cap, 64 << 20), decoded_cache,
+                    use_threads=cpu_limit is None,
                 ):
                     for x in (
                         *base.values.values(),
@@ -217,6 +220,12 @@ def screen(
                 ev.iter_forward_returns(panels(), horizon, memory_bytes=cap)
             )
             while states:
+                if removed is not None:
+                    for name in states.keys() & removed():
+                        failures[name] = "cancelled"
+                        states.pop(name)
+                    if not states:
+                        break
                 if cancel is not None and cancel.is_set():
                     failures.update(dict.fromkeys(states, "cancelled"))
                     states.clear()
@@ -289,6 +298,8 @@ def screen(
                         states.pop(name)
                         failures[name] = error
                 profile["diagnostics_seconds"] += perf_counter() - tick
+                if progress is not None:
+                    progress(profile, block.timestamps_ms[-1] + block.interval_ms)
             metrics.update({name: state.report() for name, state in states.items()})
     profile["wall_seconds"] = perf_counter() - started
     return {"results": metrics, "failures": failures, "profile": profile}

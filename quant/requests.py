@@ -111,39 +111,43 @@ def submit(path, request):
 def search(path, *, status=None):
     """Read requests and review links, optionally filtered by lifecycle status."""
     with closing(_connect(path)) as conn:
-        rows = conn.execute(
-            "SELECT * FROM requests WHERE (? IS NULL OR status=?) ORDER BY created,id",
-            (status, status),
+        return _search(conn, status=status)
+
+
+def _search(conn, *, status=None):
+    rows = conn.execute(
+        "SELECT * FROM requests WHERE (? IS NULL OR status=?) ORDER BY created,id",
+        (status, status),
+    )
+    result = []
+    for row in rows:
+        key = row["id"]
+        origins = conn.execute(
+            "SELECT experiment_id FROM request_origins WHERE request_id=? ORDER BY experiment_id",
+            (key,),
         )
-        result = []
-        for row in rows:
-            key = row["id"]
-            origins = conn.execute(
-                "SELECT experiment_id FROM request_origins WHERE request_id=? ORDER BY experiment_id",
-                (key,),
-            )
-            history = conn.execute(
-                "SELECT * FROM request_reviews WHERE request_id=? ORDER BY seq", (key,)
-            )
-            result.append(
-                {
-                    "id": key,
-                    "status": row["status"],
-                    "created": row["created"],
-                    "request": json.loads(row["request"]),
-                    "experiment_ids": [r[0] for r in origins],
-                    "review": json.loads(row["review"]) if row["review"] else None,
-                    "review_history": [
-                        {
-                            "status": r["status"],
-                            "created": r["created"],
-                            **json.loads(r["review"]),
-                        }
-                        for r in history
-                    ],
-                }
-            )
-        return result
+        history = conn.execute(
+            "SELECT * FROM request_reviews WHERE request_id=? ORDER BY seq", (key,)
+        )
+        result.append(
+            {
+                "id": key,
+                "status": row["status"],
+                "created": row["created"],
+                "request": json.loads(row["request"]),
+                "experiment_ids": [r[0] for r in origins],
+                "review": json.loads(row["review"]) if row["review"] else None,
+                "review_history": [
+                    {
+                        "status": r["status"],
+                        "created": r["created"],
+                        **json.loads(r["review"]),
+                    }
+                    for r in history
+                ],
+            }
+        )
+    return result
 
 
 def transition(

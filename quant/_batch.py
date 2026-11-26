@@ -223,6 +223,8 @@ def run_batch(
     """Advance bounded waves of independent native portfolios over one immutable chronological market stream."""
     from .simulator import _feed
 
+    removed = getattr(cancel, "cancelled", None)
+    progress = getattr(cancel, "progress", None)
     if not isinstance(data, Selection):
         raise TypeError("Batch execution requires an SDK market Selection")
     _check(data.start, data.end)
@@ -425,6 +427,12 @@ def run_batch(
             def projected():
                 nonlocal base, current, clock
                 while trials and (cancel is None or not cancel.is_set()):
+                    if removed is not None:
+                        for name in trials.keys() & removed():
+                            failures[name] = "cancelled"
+                            trials.pop(name).close()
+                        if not trials:
+                            break
                     clock = perf_counter()
                     current = next(source, None)
                     profile["market_seconds"] += perf_counter() - clock
@@ -549,6 +557,8 @@ def run_batch(
                             ):
                                 profile[key] += val
                     profile["step_wall_seconds"] += perf_counter() - tick
+                    if progress is not None:
+                        progress(profile, starts[-1] + feed.step)
                     if not trials:
                         break
                 tick = perf_counter()

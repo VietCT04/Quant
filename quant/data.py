@@ -131,6 +131,10 @@ def iter_blocks(
     selection, *, block_steps=4096, memory_bytes=64 << 20, decoded_cache=None
 ):
     """Iterate bounded dense blocks without sorting the source or manufacturing unknown observations."""
+    yield from _iter_blocks(selection, block_steps, memory_bytes, decoded_cache)
+
+
+def _iter_blocks(selection, block_steps, memory_bytes, decoded_cache, *, use_threads=True):
     ds, symbols, fields = selection.dataset, selection.symbols, selection.fields
     lo, hi = _check(
         selection.start, selection.end, infrastructure=selection.infrastructure
@@ -140,7 +144,7 @@ def iter_blocks(
         raise ValueError("Insufficient block budget")
     steps = min(rows, block_steps)
     if decoded_cache is None:
-        yield from _source_blocks(selection, steps)
+        yield from _source_blocks(selection, steps, use_threads=use_threads)
         return
     from .features import Cache, cache_key
 
@@ -177,13 +181,13 @@ def iter_blocks(
             )
         else:
             if source is None:
-                source = iter(_source_blocks(replace(selection, start=begin), steps))
+                source = iter(_source_blocks(replace(selection, start=begin), steps, use_threads=use_threads))
             block = next(source)
             decoded_cache.put(key, np.stack([block.status, *block.values.values()]))
             yield block
 
 
-def _source_blocks(selection, steps):
+def _source_blocks(selection, steps, *, use_threads=True):
     ds, symbols, fields = selection.dataset, selection.symbols, selection.fields
     lo, hi = selection.start, selection.end
     universe = load_json(ds.meta / "universes" / "liquid50.json")
@@ -207,7 +211,7 @@ def _source_blocks(selection, steps):
     step = ds.interval_ms
     projected = tuple(dict.fromkeys((*fields, "is_empty")))
     for begin, stop, tables in ds.iter_symbol_slices(
-        symbols, lo, hi, projected, time_steps=steps
+        symbols, lo, hi, projected, time_steps=steps, use_threads=use_threads
     ):
         t = np.arange(begin, stop, step, dtype="i8")
         state = np.full((len(t), len(symbols)), MISSING, dtype="u1")

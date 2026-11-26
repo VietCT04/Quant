@@ -36,7 +36,12 @@ def main():
                 help="Trusted local handler as kind=module:function",
             )
             command.add_argument("--claim-size", type=int, default=64)
+    from . import control_cli
+
+    control_cli.arguments(commands)
     args = parser.parse_args()
+    if args.action in {"service", "research"}:
+        return control_cli.main(args)
     if args.action.startswith("research-"):
         from importlib import import_module
         from pathlib import Path
@@ -78,4 +83,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

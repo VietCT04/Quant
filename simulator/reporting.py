@@ -98,6 +98,7 @@ def performance(folder, settings, final, positions, feed, *, daily=None):
         "bar_range_ms": [feed.start, feed.end], "symbols": list(feed.symbols),
         "sampling": "last UTC daily snapshot, initial wallet as the first denominator, 365 days/year",
         "sampling_count": len(complete), "end": final,
+        "daily_marked_equity": [[day * DAY, amount] for day, amount in days.iter_rows()],
         "net_pnl": equity - wallet,
         "gross_pnl_before_execution_cost_fees_and_funding": equity - wallet + final["fees"] + final["slippage"] - final["funding"],
         "total_return": ret, "annualized_return": plain(ann), "sharpe": plain(sharpe), "sortino": plain(sortino),
