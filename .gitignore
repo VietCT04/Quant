@@ -10,3 +10,5 @@ __pycache__/
 /bench-data/
 /binance-*-raw.json
 *.part
+/control-ui/node_modules/
+/control-ui/dist/
