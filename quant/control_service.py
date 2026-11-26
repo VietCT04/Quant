@@ -18,6 +18,7 @@ import psutil
 from marketdata.state import writer_lock
 
 from . import control_handlers as handlers, control_store as store, experiment, requests, research
+from .explorer import Explorer
 
 LOG = logging.getLogger(__name__)
 RECONCILE_SECONDS = 60
@@ -92,6 +93,7 @@ class Service:
     def __init__(self, root, database, source, port, web_root):
         self.root, self.path, self.source, self.port = root, database, source, port
         self.web_root = web_root
+        self.explorer = Explorer(database, root, source)
         self.wake, self.stop, self.ready = Event(), Event(), Event()
         self.settings_lock = Lock()
         self.hardware = research.hardware()
@@ -144,7 +146,17 @@ class Service:
             budgets = self.settings | {"cpu_limit": min(self.settings["cpu_limit"], self.hardware["usable_cpus"])}
         self.publish_live({"phase": "preparing", "jobs": [job["id"] for job in jobs]})
         try:
-            return handlers.execute(kind, jobs, source=self.source, root=self.root, budgets=budgets, control=Wave(self))
+            origins = {}
+            if kind == "audit":
+                for job in jobs:
+                    _, origin = self.explorer.origin_for_job(job["id"])
+                    if origin:
+                        origins[job["id"]] = self.explorer.validate_replay(origin, job["specification"])
+            results = handlers.execute(kind, jobs, source=self.source, root=self.root, budgets=budgets, control=Wave(self))
+            for job, original in origins.items():
+                if job in results:
+                    self.explorer.check_replay_output(original, results[job])
+            return results
         finally:
             self.publish_live({"phase": "idle"})
 
@@ -378,21 +390,7 @@ def build_app(service):
     async def audit(request):
         key = request.match_info["key"]
         payload = await _body(request)
-        detail = await asyncio.to_thread(store.detail, service.path, key, include_results=True)
-        record = next(
-            (trial for trial in detail["experiments"] if trial["id"] == payload["experiment_id"]
-             and trial["status"] == "completed" and trial["kind"] in {"native", "audit"}),
-            None,
-        )
-        if record is None:
-            raise ValueError("Audit replay requires a completed native experiment")
-        definition = dict(detail["definition"])
-        definition.pop("key", None)
-        definition.update({
-            "name": f"{detail['name']} / Audit", "stage": "audit", "depends_on": [],
-            "audit_of": record["id"], "candidates": [{"kind": "audit", "parameters": record["specification"]["parameters"]}],
-        })
-        result = await asyncio.to_thread(store.submit, service.path, definition, handlers.validate)
+        result = await asyncio.to_thread(service.explorer.replay, key, payload["experiment_id"])
         service.wake.set()
         service.signal(durable=True)
         return web.json_response(result, status=202, dumps=_json)
@@ -457,8 +455,22 @@ def build_app(service):
             })
         return web.Response(text="Build the control center with npm ci and npm run build in control-ui. The local API is running.", status=503)
 
+    explorer_slots = asyncio.Semaphore(2)
+
+    async def explore(request):
+        async with explorer_slots:
+            result = await asyncio.to_thread(
+                service.explorer.request, request.match_info["job"], request.match_info["resource"], request.query,
+            )
+        if isinstance(result, str):
+            return web.Response(text=result, content_type="text/csv", headers={
+                "Content-Disposition": "attachment; filename=positions.csv",
+            })
+        return web.json_response(result, dumps=_json)
+
     app.add_routes([
         web.get("/", index), web.get("/api/snapshot", snapshot),
+        web.get(r"/api/explorer/{job:[a-f0-9]{32}}/{resource}", explore),
         web.get("/api/queue", queue), web.post("/api/hypotheses", submit), web.post("/api/campaigns", submit),
         web.get("/api/hypotheses/{key}", details), web.get("/api/hypotheses/{key}/results", details),
         web.post("/api/hypotheses/{key}/audit", audit),
