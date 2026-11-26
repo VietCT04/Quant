@@ -1,4 +1,4 @@
-﻿# Quant Research Control Center
+# Quant Research Control Center
 
 The control center runs predeclared development hypotheses in a detached local service. An accepted submission has a durable hypothesis ID and one experiment ID per trial. You can close the terminal and browser while the service runs. Review outcomes in the inbox when you return.
 
@@ -73,6 +73,10 @@ The built-in trusted handlers are `screen`, `native`, and `audit`. EMA spans are
 Screen options include `horizon`, `method`, `groups`, and `event_threshold`. Native protocols can request `prepared_cache`. For missing features, add a canonical `capabilities` entry with optional `streaming`, `causal`, and a matching structured `request` from the [feature-request guide](FEATURE_REQUESTS.md). The dispatcher records missing capabilities as blocked outcomes and lets independent work continue.
 
 Ordinary requests pass the existing development gate. The control center exposes development selection, descriptive screening, and native replay. Audit replay uses the same development gate.
+
+## Backtest Explorer
+
+Open a completed native candidate from Alpha Results, hypothesis or trial details, or Research Inbox. The [Backtest Explorer guide](BACKTEST_EXPLORER.md) covers audited candles, reconciled positions, synchronized panels, and exact replay.
 
 ## Local API and event lifecycle
 

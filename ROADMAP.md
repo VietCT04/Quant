@@ -55,6 +55,10 @@ Data coverage, manifests and tests remain the evidence for these baselines. Simu
 
 **Boundary.** Research specifications are predeclared and run only on development selections. Phase 5 automation remains owner-authorized.
 
+## Phase 4.6 · Backtest Explorer
+
+The [Backtest Explorer](docs/BACKTEST_EXPLORER.md) links native candidate results to audited candles, recorded fills, execution timelines, reconciled positions, and synchronized signal and portfolio panels. Detailed replay uses the existing queue and leaves ordinary research in summary mode.
+
 ## Phase 5 · Authorized automated alpha discovery
 
 **Dependencies.** Explicit owner authorization, verified scheduler and resource limits, an accepted capability and experiment registry, and tested chronological evaluation boundaries.

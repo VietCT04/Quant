@@ -61,6 +61,8 @@ The cancellation event is checked between blocks, including during cache creatio
 
 Summary and benchmark persist one atomic JSON per wave by default. `Result.report_path` points to that artifact, keyed by candidate name. `report_storage="per-run"` restores separate reports. Summary omits closed-fill distribution statistics and individual logs. Choose standard or audit replay for those artifacts. All four modes use the same order and settlement logic.
 
+The [Backtest Explorer](BACKTEST_EXPLORER.md) uses the existing scheduler for on-demand audit and checks source and accounting equivalence before linking detailed results to a summary trial.
+
 ## Diagnostic screening and scheduling
 
 Use `q.evaluate.screen` with `ScreenCandidate` values to share market preparation, causal features and forward labels. It reports Pearson or rank IC, coverage, score turnover, monthly stability and optional quantiles and threshold events. `screen_decay` uses a fixed horizon grid. `screen_walk_forward` accepts existing validation splits and supplies only the training selection to the candidate factory. Screening metrics are descriptive. Score turnover is a proxy and omits native execution and costs.
