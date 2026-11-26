@@ -140,6 +140,22 @@ def extension_candidates():
         yield name, prediction, baseline | changes, EXTENDED, None
 
 
+def retention_candidates():
+    _, _, best, _, _ = next(extension_candidates())
+    conditions = [
+        ("Retain 90% after recovery", dict(release_fraction=.10),
+         "Retaining more inventory during follow-through improves net returns enough to compensate for larger reversals."),
+        ("Hold the residual up to five days", dict(extension_hours=120, extension_trail=.05),
+         "Broad market recoveries can continue longer than three days, even with a wider trailing reversal."),
+        ("Larger recovery allocation", dict(leg_fraction=.12, inventory_fraction=.30),
+         "Larger orders deploy available cash on recoverable shocks before the signal expires."),
+        ("Retain 90% after deeper shock", dict(release_fraction=.10, depth=.03, gap=.032),
+         "More severe initial dislocations justify a larger residual position during a subsequent recovery."),
+    ]
+    for name, overrides, prediction in conditions:
+        yield name, prediction, best | overrides, EXTENDED, None
+
+
 def promoted_candidates(port, ids, screening_selection, *, roi=False):
     fingerprint = q.data.fingerprint(screening_selection)
     for hypothesis in ids:
@@ -167,8 +183,8 @@ def promoted_candidates(port, ids, screening_selection, *, roi=False):
 
 
 def submit(port, output, promotion=(), *, liquidity=False, followup=False, context=False,
-           tail=False, roi=False, extension=False):
-    roi = roi or extension
+           tail=False, roi=False, extension=False, retention=False):
+    roi = roi or extension or retention
     dates = FULL if promotion else SCREEN
     source = request(port, "/service")["coverage"]["source"]
     dataset = q.data.open(source)
@@ -176,7 +192,8 @@ def submit(port, output, promotion=(), *, liquidity=False, followup=False, conte
     protocol = dict(start=selection.start, end=selection.end, universe=selection.symbols,
                     dataset_fingerprint=q.data.fingerprint(selection), seed=716, costs={})
     candidates = (promoted_candidates(port, promotion, q.data.select(dataset, start=SCREEN[0], end=SCREEN[1]), roi=roi)
-                  if promotion else extension_candidates() if extension else allocated_candidates() if roi else
+                  if promotion else retention_candidates() if retention else
+                  extension_candidates() if extension else allocated_candidates() if roi else
                   liquidity_candidates() if liquidity else
                   context_candidates() if context else
                   tail_candidates() if tail else
@@ -196,7 +213,8 @@ def submit(port, output, promotion=(), *, liquidity=False, followup=False, conte
     ]
     if not hypotheses:
         raise ValueError("No completed candidate meets the recorded promotion gate")
-    stage = ("full archive" if promotion else "recovery follow-through" if extension else
+    stage = ("full archive" if promotion else "recovered inventory retention" if retention else
+             "recovery follow-through" if extension else
              "equity-proportional inventory" if roi else
              "frozen reference round" if liquidity else
              "directional context round" if context else
@@ -221,6 +239,7 @@ def main():
     mode.add_argument("--promote-roi", nargs="+", default=[])
     mode.add_argument("--roi", action="store_true")
     mode.add_argument("--extension", action="store_true")
+    mode.add_argument("--retention", action="store_true")
     mode.add_argument("--liquidity", action="store_true")
     mode.add_argument("--followup", action="store_true")
     mode.add_argument("--context", action="store_true")
@@ -228,7 +247,8 @@ def main():
     args = parser.parse_args()
     print(json.dumps(submit(args.port, args.out, args.promote or args.promote_roi,
                             liquidity=args.liquidity, followup=args.followup, context=args.context,
-                            tail=args.tail, roi=args.roi or bool(args.promote_roi), extension=args.extension)), flush=True)
+                            tail=args.tail, roi=args.roi or bool(args.promote_roi), extension=args.extension,
+                            retention=args.retention)), flush=True)
 
 
 if __name__ == "__main__":
