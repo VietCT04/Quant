@@ -38,3 +38,5 @@ The 96-hour long-only variant remained profitable in aggregate but did not show 
 ## Context from the prior research phase
 
 The pre-V2 five-minute screens and July target-based runs in [PH5-001](../phase5/KNOWLEDGE.md) remain intact. Their large losses arose under a high-turnover target strategy, participation slicing, repeated adjustments and a modeled 35% drawdown stop. The tested policies failed their stated objectives. Those results provide limited evidence about the broader mechanisms under deliberate market order entry, holding and exit. Turnover and realized execution remain priorities in follow-ups. Earlier and current results use different model versions and should keep their original labels.
+
+The subsequent [shock accumulation research journal](../shock_inventory/KNOWLEDGE.md) tracks the separate V2 long and short inventory experiments.

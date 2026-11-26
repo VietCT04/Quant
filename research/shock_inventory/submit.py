@@ -21,6 +21,13 @@ VARIANTS = {
          {"mechanism": "residual", "side": -1, "cadence": 12, "depth": .014,
           "retrace": .40, "hold_minutes": 360}),
     ],
+    "tempo": [
+        ("Five-second repricing diagnostic", "Sampling active downside moves every bar can permit more independent inventory steps.",
+         {"mechanism": "velocity", "cadence": 1, "depth": .014, "retrace": .40, "hold_minutes": 360}),
+        ("Five-second flow diagnostic", "Faster observations can capture more of an isolated decelerating sell burst.",
+         {"mechanism": "residual_flow", "cadence": 1, "depth": .012, "retrace": .34,
+          "hold_minutes": 360, "dynamic": True}),
+    ],
     "initial": [
         ("Absolute accelerating decline", "Acceleration after a fast, large downside move predicts a partial recovery.", {"mechanism": "velocity"}),
         ("Coin-specific decline", "An idiosyncratic decline without a comparable market selloff is more likely to reverse.", {"mechanism": "residual"}),
@@ -39,7 +46,7 @@ def payload(source, group, dates, *, origin=None, symbols=None):
         strategy = {k: spec["strategy"][k] for k in ("id", "version")}
         variants = [(group, "Inspect the specified hypothesis over the stated range.", spec["parameters"])]
     else:
-        strategy = VERS | {"version": "2.0.0"} if group == "patient" else VERS
+        strategy = VERS | {"version": "2.0.0"} if group in {"patient", "tempo"} else VERS
         variants = VARIANTS[group]
     return {"campaign": f"Shock inventory / {group}", "hypotheses": [
         {"name": name, "family": "Shock inventory", "stage": "simulation",
