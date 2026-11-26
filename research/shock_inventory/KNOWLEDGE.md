@@ -38,3 +38,25 @@ The patient six-month wave is H-0012 through H-0014 on port 8765 and its durable
 The direction of gross improvement is encouraging across the three policies. The short still lost money after costs. The flow variant made eight positions in total, used at most 26.44 USDT gross at once, and averaged 3.13 fills per lifecycle. The price variant averaged 2.63 fills per lifecycle. The evidence remains weak on capital utilization and on the intended large number of entries and exits in one position. The short-window Sharpe is too unstable to interpret. These paired windows reuse the same dates, and the strategy changes were informed by the first window.
 
 Two exact patient diagnostic replays were accepted as H-0015 and H-0016. The separate five-second check H-0017 and H-0018 varies only decision cadence from the two patient long policies. It tests whether faster observation actually increases economically justified inventory steps while preserving the same shock, pricing and risk rules. The answers are diagnostic evidence, independent of full-history promotion decisions. H-0017 and H-0018 were accepted in 317 ms.
+
+## Six-month outcomes
+
+All seven candidates used [2026-05-25, 2026-11-25) UTC and the full Liquid 50. Positions were sized by the strategy under the 10,000 USDT V2 wallet. None earned positive net P&L, so neither round advanced to two years.
+
+| Policy | Registry / hypothesis | Gross USDT | Net USDT | Daily Sharpe | Fills/day | Lifecycles/day |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Accelerating decline | 8791 / H-0007 | +47.99 | -411.19 | -10.66 | 336.5 | 135.2 |
+| Coin-specific decline | 8791 / H-0008 | +48.88 | -263.92 | -15.99 | 227.3 | 90.3 |
+| Aggressive sell burst | 8791 / H-0009 | +25.83 | -257.76 | -9.08 | 209.4 | 87.4 |
+| Coin-specific short | 8791 / H-0010 | +69.63 | -356.23 | -18.79 | 291.8 | 117.5 |
+| Patient absolute repricing | 8765 / H-0012 | +53.75 | -79.51 | -3.11 | 129.1 | 49.7 |
+| Patient idiosyncratic flow | 8765 / H-0013 | -11.02 | -24.05 | -4.30 | 8.3 | 3.0 |
+| Patient isolated short | 8765 / H-0014 | -55.64 | -200.55 | -11.50 | 115.3 | 51.1 |
+
+All four first-round gross gains were overwhelmed by trading friction. The price patient variant reduced churn and still spent more on execution than it earned gross. The patient flow policy reduced the fill count sharply, but lost even before costs. The patient short's deterioration suggests the recovery filter needs independent treatment for each direction. The only recorded rejection category was empty next opens. The position count stayed much closer to the fill count than the intended inventory behavior requires. Raw summaries and experiment identifiers are in the initial and patient evidence JSON files.
+
+The separate every-five-second diagnostic produced -0.90 USDT net for the patient price policy and +2.57 USDT net for patient flow on the two-day window. Price fills increased from 102.5 to 217 per day and flow fills from 12.5 to 48. Flow fills per lifecycle were essentially unchanged at about 3.1, so faster observation mainly increased the number of positions. The positive two-day flow result remains weak evidence. The relevant follow-up is a native six-month test at five seconds using the same flow parameters and the optimized execution path.
+
+Confidence is strong in the measured failures of the tested policies and low that these results generalize to all shock mean reversion. The two-day improvements did not carry over to six months at the slower clock. Observed adverse shocks can be driven by persistent price news, macro risk or temporary liquidity demand. The current data cannot separate those sources cleanly.
+
+The unchanged five-second flow follow-up was accepted as H-0035 on port 8765. Its source diagnostic is H-0018, job acdf5487bdc54731a328853318180618. It runs on the optimized V2 runtime with the same strategy version and parameters.

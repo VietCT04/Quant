@@ -72,3 +72,5 @@ Use `q.research.submit` to create jobs in the experiment registry. Each job has 
 A trusted batch handler receives a list of registered job records and returns a mapping keyed by experiment ID. Each result carries metrics or a structured failure, and may carry artifacts and warnings. Bind the requested market data using `q.research.verify_selection`. Specify the handler code explicitly in Python or by using `research-run DB --handler kind=module:function`. The database stores data-only specifications. `research-submit DB SPEC.json` accepts the keyword arguments of `q.research.submit`, including `jobs`. `research-cancel DB ID` records cancellation. An in-flight handler can respond cooperatively to a cancellation event and its committed outcome reflects cancellation requests.
 
 V2 authorizes ordinary research throughout [2024-11-25, 2026-11-25) UTC. Earlier exclusions are historical. Liquid 50 was frozen with November 2026 volume, so its historical membership has selection bias. [Research protocol](RESEARCH_PROTOCOL.md)
+
+[Order throughput benchmarks](ORDER_THROUGHPUT.md) cover compiled five-second decisions, projected caches and comparable native outcomes.

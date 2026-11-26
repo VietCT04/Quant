@@ -130,12 +130,13 @@ def _hash_sources(paths, revision):
 _RUNTIME_MODULES = (
     "quant/_batch.py", "quant/_core.py", "quant/_prepared.py", "quant/_screen.py",
     "quant/control_handlers.py", "quant/strategy.py", "quant/trading.py",
-    "quant/_order_trial.py", "quant/_timeframes.py", "quant/explorer_ledger.py", "quant/evaluate.py", "quant/features.py",
+    "quant/_order_trial.py", "quant/_timeframes.py", "quant/_prefetch.py", "quant/explorer_ledger.py", "quant/evaluate.py", "quant/features.py",
     "quant/data.py", "quant/registry.py", "quant/validation.py", "quant/simulator.py",
     "quant/cs.py", "quant/math.py", "quant/ts.py", "quant/indicators.py", "quant/stats.py",
     "quant/volatility.py", "quant/microstructure.py", "quant/portfolio.py", "quant/risk.py",
     "quant/signal.py", "quant/performance.py", "marketdata/reader.py", "marketdata/model.py", "marketdata/aggregate.py",
-    "simulator/feed.py", "simulator/native.py", "simulator/reporting.py", "simulator/core.cpp", "uv.lock",
+    "simulator/feed.py", "simulator/native.py", "simulator/reporting.py", "simulator/core.cpp",
+    "simulator/order_program.hpp", "simulator/shock_features.hpp", "marketdata/reader.py", "uv.lock",
 )
 _RUNTIME_PATHS = tuple(path for name in _RUNTIME_MODULES if (path := ROOT / name).is_file())
 _LOADED_RUNTIME = _source_hash(_RUNTIME_PATHS)
@@ -292,6 +293,7 @@ class Runner:
     def __init__(self, resolved, symbols, seed, *, trace=None, end=None):
         strategy, self.plan, params, self.receipt = resolved
         self.strategy = strategy
+        self.parameters = params
         self.names = tuple(plot.name for plot in self.plan.plots)
         self.fields = self.strategy.fields
         self.state = strategy.initialize(MappingProxyType(params), tuple(symbols), np.random.default_rng(seed))
@@ -358,7 +360,21 @@ class Runner:
     def order_step(self, block, row, portfolio):
         from .trading import Orders
 
-        view = self._view_row(block, row)
+        # Block-major validates the axes and coverage upstream. Revalidate untrusted inputs
+        # through the public Block constructor. Here only expose the current read-only row.
+        sl = slice(row, row+1)
+        names = (*self.fields, *self.plan.features)
+        view = object.__new__(data.Block)
+        attributes = (
+            ("timestamps_ms", block.timestamps_ms[sl]), ("symbols", block.symbols),
+            ("available_at_ms", block.available_at_ms[sl]), ("status", block.status[sl]),
+            ("values", MappingProxyType({name: block.values[name][sl] for name in names})),
+            ("interval_ms", block.interval_ms),
+            ("units", MappingProxyType({name: block.units[name] for name in names})),
+            ("provenance", block.provenance),
+        )
+        for name, value in attributes:
+            object.__setattr__(view, name, value)
         intents = Orders(view.symbols)
         series = self.strategy.orders(self.state, view, portfolio, intents)
         if series is not None:

@@ -5,6 +5,7 @@ from collections import defaultdict
 from copy import copy
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
+import os
 from pathlib import Path
 from time import perf_counter
 from types import MappingProxyType
@@ -15,12 +16,13 @@ import numpy as np
 
 from marketdata.model import DAY, load_json, write_json
 from simulator.feed import MarketDataFeed, order_rules
-from simulator.native import Engine, OrderSettings
+from simulator.native import Engine, OrderSettings, ShockFeatureStream
 from simulator.reporting import Logs, performance, record
 
 from . import features
 from ._core import array
 from ._prepared import prepared
+from ._prefetch import prefetch
 from ._resources import hardware, worker_count
 from .data import UNITS, Block, Selection, fingerprint
 from .validation import _check
@@ -375,6 +377,8 @@ def run_batch(
         observed_bars=0,
         scheduled_cells=0,
         native_candidate_cells=0,
+        compiled_order_cells=0,
+        fused_feature_blocks=0,
         market_seconds=0.0,
         feature_seconds=0.0,
         signals_worker_seconds=0.0,
@@ -399,6 +403,8 @@ def run_batch(
     else:
         template = _feed(data, block_steps)
         rules = order_rules(template.dataset, template.symbols)
+    if cache_directory is None:
+        template._funding_data()
     data_identity = fingerprint(data) if resume_token is not None else None
     with ThreadPoolExecutor(max_workers=worker_limit) as pool:
         while pointer < len(candidates):
@@ -420,6 +426,7 @@ def run_batch(
                 trace_bytes = 8 * max((c.trace_width for c in wave), default=0) if logging == "audit" else 0
                 per_cell = (
                     128 + 24 * len(extra_fields) + 32 * len(graph)
+                    + ((80 + 16 * len(extra_fields)) if ordered and worker_limit > 1 else 0)
                     + live * ((1024 if logging in {"standard", "audit"} else 48) + 3 * trace_bytes)
                 )
                 persistent = 16384 * len(wave) * n
@@ -436,7 +443,11 @@ def run_batch(
             feed.mark_missing_slots = np.zeros_like(template.mark_missing_slots)
             feed.status_counts = np.zeros_like(template.status_counts)
             feed.profile = dict.fromkeys(template.profile, 0.0)
-            feed.read_threads = cpu_limit is None
+            feed.read_threads = cpu_limit is None and not ordered
+            spare = (cpu_limit if cpu_limit is not None else hardware()["usable_cpus"]) - worker_limit
+            overlap_reader = ordered and worker_limit > 1 and spare > 0
+            if overlap_reader:
+                feed.read_workers = min(n, 8, spare)
             archive = None
             specification = None
             if report_storage == "batch":
@@ -509,8 +520,9 @@ def run_batch(
             profile["feature_nodes"] += len(graph)
             clock = perf_counter()
             # Extended fields share the native feed's projected Parquet scan.
-            source = iter(feed.blocks(shared=True, projected=extra_fields) if extra_fields
-                          else prepared(data, feed, cache_directory, caches, profile, cancel))
+            source = iter(prepared(data, feed, cache_directory, caches, profile, cancel, projected=extra_fields))
+            if overlap_reader:
+                source = prefetch(source)
             base = None
             current = None
 
@@ -542,7 +554,8 @@ def run_batch(
                         values[f] = x
                     if extra_fields:
                         for name, projection in current[3].items():
-                            projection[missing] = np.nan
+                            if any_missing:
+                                projection = np.where(missing, np.nan, projection)
                             projection.flags.writeable = False
                             values[name] = projection
                     available = starts + feed.step + feed.lag
@@ -561,6 +574,14 @@ def run_batch(
                     yield base
 
             try:
+                fused = None
+                native_planes = ("fast", "move", "old_fast", "prior_vol", "trend", "fair",
+                                 "aggression", "volume_current", "volume_prior", "range_high", "range_low")
+                if (trials and all(trial.ordered is not None and trial.ordered.compiled for trial in trials.values())
+                        and os.getenv("QUANT_SHOCK_FEATURES") != "python"):
+                    fused = ShockFeatureStream(len(feed.symbols),
+                                               flow=any("aggression" in k for k in keys.values()),
+                                               price_range=any("prior_range_edge" in k for k in keys.values()))
                 if all(c.allocation is not None for c in wave):
 
                     def static_inputs():
@@ -574,7 +595,7 @@ def run_batch(
                             clock = perf_counter()
 
                     blocks = static_inputs()
-                elif 1 in sampled:
+                elif 1 in sampled and fused is None:
                     blocks = features.evaluate(
                         projected(),
                         sampled[1],
@@ -589,8 +610,32 @@ def run_batch(
                     if biggest * n * (128 + 24 * len(extra_fields)) > memory_cap - persistent:
                         raise MemoryError("Higher timeframe aggregation exceeds the configured memory budget")
                 aligned_features = CompletedFeatures(sampled, feed.step, max(1, memory_cap - persistent), feature_failed)
+                if fused is not None:
+                    from ._order_trial import observed_warmup
+                    run_lengths = np.zeros(len(feed.symbols), dtype="i8")
                 for feature_block in blocks:
                     higher = aligned_features.advance(base) if aligned_features.groups else {}
+                    native = dict(zip(native_planes, fused.advance(base))) if fused is not None else {}
+                    readiness = {}
+                    if fused is not None:
+                        shared_ready, run_lengths = observed_warmup(
+                            base.status, base.values["close"], run_lengths, warmup
+                        )
+                        profile["fused_feature_blocks"] += 1
+                        masks = {}
+                        for name, trial in trials.items():
+                            signature = tuple(
+                                ("range_high" if trial.candidate.decision.parameters["side"] == 1 else "range_low")
+                                if alias == "prior_range_edge" else alias for alias in keys[name]
+                            )
+                            if signature not in readiness:
+                                qualified = shared_ready.copy()
+                                for plane in signature:
+                                    if plane not in masks:
+                                        masks[plane] = np.isfinite(native[plane])
+                                    qualified &= masks[plane]
+                                readiness[signature] = qualified
+                            readiness[name] = (shared_ready, readiness[signature])
                     for name in tuple(trials):
                         blocked = next(
                             (
@@ -621,9 +666,18 @@ def run_batch(
                                 units = dict(base.units)
                                 for alias, node in keys[name].items():
                                     period = trial.candidate.feature_periods.get(alias, 1)
-                                    values[alias] = (feature_block.values if period == 1 else higher)[expressions[node, period]]
+                                    if native:
+                                        plane = alias
+                                        if alias == "prior_range_edge":
+                                            side = trial.candidate.decision.parameters["side"]
+                                            plane = "range_high" if side == 1 else "range_low"
+                                        values[alias] = native[plane]
+                                    else:
+                                        values[alias] = (feature_block.values if period == 1 else higher)[expressions[node, period]]
                                     units[alias] = node.units
                                 block = _DecisionFrame(base, values, units)
+                                if native:
+                                    block._order_readiness = readiness[name]
                             timing = trial.advance(
                                 starts,
                                 market,
@@ -647,6 +701,9 @@ def run_batch(
                             trials.pop(name).close()
                         else:
                             profile["native_candidate_cells"] += status.size
+                            trial = trials[name]
+                            if trial.ordered is not None and trial.ordered.compiled:
+                                profile["compiled_order_cells"] += status.size
                             for key, val in zip(
                                 (
                                     "signals_worker_seconds",
@@ -693,6 +750,8 @@ def run_batch(
                 results.update(completed)
                 profile["finalization_seconds"] += perf_counter() - tick
             finally:
+                if fused is not None:
+                    fused.close()
                 source.close()
                 for trial in trials.values():
                     trial.close()

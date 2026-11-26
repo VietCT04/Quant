@@ -118,7 +118,7 @@ def validate(candidate, spec, *, source=None):
         _, _, normalized, frozen = strategy.prepare(
             candidate["strategy"], params, rebalance_ticks=settings.rebalance_ticks, screen=kind == "screen",
         )
-        if kind != "screen" and evaluation.get("prepared_cache") and set(frozen["fields"]) - FIELDS.keys():
+        if kind != "screen" and not isinstance(settings, OrderSettings) and evaluation.get("prepared_cache") and set(frozen["fields"]) - FIELDS.keys():
             raise ValueError("Prepared cache supports only close, volume, execution and mark. Extended fields share a direct scan.")
         if isinstance(settings, OrderSettings) and source is not None:
             frozen["warmup_fingerprint"] = warmup_fingerprint(data.open(source), spec, frozen)
@@ -228,6 +228,8 @@ def execute(kind, jobs, *, source, root, budgets, control):
         failures.update(result["failures"])
     elif candidates:
         completed = set()
+        if all(isinstance(candidate.config, OrderSettings) for candidate in candidates):
+            limits["block_steps"] = 8192
         try:
             result = simulator.run_batch(
                 selection, candidates, out=output, **limits, disk_budget_gib=budgets["disk_budget_gib"],

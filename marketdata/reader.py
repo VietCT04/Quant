@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sqlite3
 
@@ -56,10 +57,27 @@ class MarketDataset:
             raise ValueError("Requested symbols must belong to the configured universe")
         return requested
 
-    def _paths(self, symbol, lo, hi):
+    def _manifest_months(self, symbols):
+        manifest = self.meta / "manifest.sqlite"
+        if not manifest.is_file():
+            return None
+        result = {symbol: set() for symbol in symbols}
+        places = ",".join("?" for _ in symbols)
+        with closing(sqlite3.connect(manifest.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            rows = db.execute(
+                f"""SELECT symbol,month FROM partitions WHERE symbol IN ({places})
+                    AND status IN ('complete','qualified','incomplete')""", tuple(symbols),
+            )
+            for symbol, month in rows:
+                result[symbol].add(month)
+        return result
+
+    def _paths(self, symbol, lo, hi, *, months=None):
         manifest = self.meta / "manifest.sqlite"
         committed = None
-        if manifest.is_file():
+        if months is not None:
+            committed = months[symbol]
+        elif manifest.is_file():
             with closing(sqlite3.connect(manifest.resolve().as_uri() + "?mode=ro", uri=True)) as db:
                 committed = {row[0] for row in db.execute(
                     "SELECT month FROM partitions WHERE symbol=? AND status IN ('complete','qualified','incomplete')",
@@ -73,14 +91,17 @@ class MarketDataset:
                 yield target
             current = next_month(current)
 
-    def _scan(self, symbol, lo, hi, internal, num_rows, use_threads=True):
+    def _scan(self, symbol, lo, hi, internal, num_rows, use_threads=True, *, months=None):
         columns = [f for f in internal if f not in {"symbol", "available_at_ms"}]
-        for path in self._paths(symbol, lo, hi):
+        for path in self._paths(symbol, lo, hi, months=months):
             source = ds.dataset(path, format="parquet")
             predicate = (ds.field("timestamp_ms") >= lo) & (ds.field("timestamp_ms") < hi)
             for batch in source.to_batches(columns=columns, filter=predicate,
                                            batch_size=num_rows, use_threads=use_threads, batch_readahead=1):
                 if not batch.num_rows:
+                    continue
+                if "symbol" not in internal and "available_at_ms" not in internal:
+                    yield batch
                     continue
                 data = {name: batch[name] for name in columns}
                 if "symbol" in internal:
@@ -89,28 +110,47 @@ class MarketDataset:
                     data["available_at_ms"] = pc.add(batch["timestamp_ms"], self.interval_ms + self.availability_lag_ms)
                 yield pa.record_batch(data)
 
-    def _slices(self, symbols, lo, hi, columns, steps, use_threads=True):
+    def _slices(self, symbols, lo, hi, columns, steps, use_threads=True, workers=1):
         internal = list(dict.fromkeys(["timestamp_ms", *columns]))
-        streams = {s: iter(self._scan(s, lo, hi, internal, max(steps, 4096), use_threads)) for s in symbols}
-        current = {s: next(stream, None) for s, stream in streams.items()}
-        for start in range(lo, hi, steps * self.interval_ms):
-            end = min(hi, start + steps * self.interval_ms)
+        months = self._manifest_months(symbols)
+        streams = {s: iter(self._scan(s, lo, hi, internal, max(steps, 32768), use_threads, months=months))
+                   for s in symbols}
+        pending = {s: None for s in symbols}
+        groups = [symbols[i::workers] for i in range(workers)]
+
+        def collect(group, end, first):
             result = {}
-            for symbol, stream in streams.items():
+            for symbol in group:
+                stream = streams[symbol]
+                batch = next(stream, None) if first else pending[symbol]
                 parts = []
-                batch = current[symbol]
                 while batch is not None:
                     index = int(np.searchsorted(batch["timestamp_ms"].to_numpy(), end))
                     if index:
                         parts.append(batch.slice(0, index))
                     if index < batch.num_rows:
-                        current[symbol] = batch.slice(index)
+                        pending[symbol] = batch.slice(index)
                         break
                     batch = next(stream, None)
                 else:
-                    current[symbol] = None
+                    pending[symbol] = None
                 result[symbol] = pa.Table.from_batches(parts) if parts else None
-            yield start, end, result
+            return result
+
+        pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
+        try:
+            for start in range(lo, hi, steps * self.interval_ms):
+                end = min(hi, start + steps * self.interval_ms)
+                if pool is None:
+                    result = collect(symbols, end, start == lo)
+                else:
+                    parts = pool.map(lambda group: collect(group, end, start == lo), groups)
+                    combined = {s: table for piece in parts for s, table in piece.items()}
+                    result = {s: combined[s] for s in symbols}
+                yield start, end, result
+        finally:
+            if pool is not None:
+                pool.shutdown()
 
     def iter_batches(self, symbols, start, end, columns=None, *, batch_size=65_536):
         """Yield chronologically interleaved RecordBatches, breaking ties by symbol."""
@@ -156,13 +196,13 @@ class MarketDataset:
                 result[symbol] = pa.table(aligned)
             yield axis, result
 
-    def iter_symbol_slices(self, symbols, start, end, columns, *, time_steps=4096, use_threads=True):
+    def iter_symbol_slices(self, symbols, start, end, columns, *, time_steps=4096, use_threads=True, workers=1):
         """Yield bounded UTC windows of sparse, ordered Arrow tables keyed by symbol."""
         lo, hi = as_millis(start), as_millis(end)
         resolved = self._symbols(symbols)
         if not resolved or time_steps < 1 or lo >= hi or lo % self.interval_ms or hi % self.interval_ms:
             raise ValueError("Symbol slices require symbols, aligned UTC boundaries and a positive batch size")
-        return self._slices(resolved, lo, hi, columns, time_steps, use_threads)
+        return self._slices(resolved, lo, hi, columns, time_steps, use_threads, workers)
 
     def coverage(self, symbols, start, end):
         """Return reported coverage segments. An absent segment is outside published coverage."""

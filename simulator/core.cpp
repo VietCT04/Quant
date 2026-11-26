@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -63,6 +64,9 @@ struct PositionView {
     Time gap_ticks, held_unmarked_ticks, fallback_ticks, orders, fills;
 };
 
+#include "order_program.hpp"
+#include "shock_features.hpp"
+
 class Strategy {
 public:
     virtual ~Strategy() = default;
@@ -90,6 +94,8 @@ class Engine {
     bool suspended = false;
     double order_step = 0;
     bool liquidation = false;
+    std::unique_ptr<OrderProgram> program;
+    std::vector<Request> program_orders;
 public:
     std::vector<Order> orders;
     std::vector<Cashflow> cashflows;
@@ -319,9 +325,18 @@ public:
                    equity, gross, net, im, mm, equity - im, fees, slippage, funding, turnover, worst_dd};
     }
 
+    void configure_shock(const ShockConfig& config) {
+        if (cfg.latency != 0 || program) throw std::invalid_argument("Compiled policy requires zero latency and a fresh engine");
+        program = std::make_unique<ShockProgram>(config, book.size());
+    }
+
     void ordered(const Time* starts, const Market* values, const unsigned char* flags, const double* opens,
                  std::size_t ticks, const Settlement* events, std::size_t event_count,
-                 const Request* requests, std::size_t request_count) {
+                 const Request* requests, std::size_t request_count,
+                 const double* const* columns = nullptr, const unsigned char* ready = nullptr,
+                 Time start = 0, Time cadence = 1) {
+        if (columns && (!program || !ready || cadence <= 0))
+            throw std::invalid_argument("Missing compiled order program inputs");
         orders.clear(); cashflows.clear(); targets.clear(); curve.clear();
         const auto n = book.size();
         std::size_t f = 0, q = 0;
@@ -344,6 +359,11 @@ public:
                 if (book[i].qty && state[i] == 0 && price_ok(open[i]))
                     execute({t, 0, static_cast<Time>(i), 2, t - cfg.interval, 0},
                             t, open[i], state[i], market[i].volume, gross, upnl, active, 22);
+            }
+            if (columns && !program_orders.empty()) {
+                for (const auto& r : program_orders)
+                    execute(r, t, open[r.symbol], state[r.symbol], market[r.symbol].volume, gross, upnl, active);
+                program_orders.clear();
             }
             while (q < request_count && requests[q].due == t) {
                 const auto& r = requests[q++];
@@ -376,14 +396,18 @@ public:
             bool sample = end % 86400000 == 0 || (cfg.logging == 1 && count % cfg.snapshot_ticks == 0);
             if (sample || j+1 == ticks) snapshot(end, gross, upnl, uncertain);
             if (sample) curve.push_back(current);
+            if (columns && (t - start) / cfg.interval % cadence == 0) {
+                program->decide({end, n, j, columns, state, ready + j*n,
+                                 book, equity - gross / cfg.leverage}, program_orders);
+            }
         }
         if (f != event_count || q != request_count) throw std::invalid_argument("Events cross the block boundary");
     }
 
     void terminal(Time end, const Request* outstanding, std::size_t size) {
         orders.clear(); cashflows.clear(); targets.clear(); curve.clear();
-        for (std::size_t i = 0; i < size; ++i) {
-            const auto& r = outstanding[i];
+        for (std::size_t i = 0; i < size + program_orders.size(); ++i) {
+            const auto& r = i < size ? outstanding[i] : program_orders[i - size];
             const auto& p = book.at(r.symbol);
             ++book[r.symbol].orders;
             Order log{};
@@ -395,6 +419,7 @@ public:
             log.buying_power = std::max(0.0, current.available * cfg.leverage);
             orders.push_back(log);
         }
+        program_orders.clear();
         double gross, upnl;
         Time active, uncertain = current.uncertain_positions;
         totals(gross, upnl, active);
@@ -521,4 +546,25 @@ EXPORTED int sim_run_orders(Engine* sim, const Time* starts, const Market* marke
 }
 EXPORTED int sim_terminal(Engine* sim, Time end, const Request* requests, std::size_t count) {
     try { sim->terminal(end, requests, count); return 0; } catch (...) { return -1; }
+}
+
+EXPORTED int sim_configure_shock(Engine* sim, const ShockConfig* config) {
+    try { sim->configure_shock(*config); return 0; } catch (...) { return -1; }
+}
+EXPORTED int sim_run_program(Engine* sim, const Time* starts, const Market* market, const unsigned char* flags,
+                              const double* opens, std::size_t ticks, const Settlement* funding,
+                              std::size_t events, const double* const* columns, const unsigned char* ready,
+                              Time start, Time cadence) {
+    try { sim->ordered(starts, market, flags, opens, ticks, funding, events, nullptr, 0,
+                       columns, ready, start, cadence); return 0; } catch (...) { return -1; }
+}
+
+EXPORTED ShockFeatures* sim_shock_features_create(std::size_t n, int flow, int range) {
+    try { return new ShockFeatures(n, flow != 0, range != 0); } catch (...) { return nullptr; }
+}
+EXPORTED void sim_shock_features_delete(ShockFeatures* self) { delete self; }
+EXPORTED int sim_shock_features_run(ShockFeatures* self, const double* close, const double* quote,
+                                     const double* buy, const double* sell, const unsigned char* status,
+                                     std::size_t rows, double* out) {
+    try { self->evaluate(close, quote, buy, sell, status, rows, out); return 0; } catch (...) { return -1; }
 }

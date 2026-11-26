@@ -88,6 +88,13 @@ class _Config(ct.Structure):
     _fields_ = [(f, ct.c_double) for f in _CONFIG_FLOATS] + [(f, ct.c_int64) for f in _CONFIG_INTS]
 
 
+class _ShockConfig(ct.Structure):
+    _floats = ("depth", "sigma", "step", "hold_minutes", "order_usdt", "inventory", "stop",
+               "retrace", "market_limit", "add_minutes", "patient_minutes", "minimum_gap")
+    _fields_ = ([(name, ct.c_double) for name in _floats] +
+                [(name, ct.c_int64) for name in ("side", "mechanism", "dynamic", "patient")])
+
+
 def dtype(ints, floats):
     return np.dtype([(x, "=i8") for x in ints.split()] + [(x, "=f8") for x in floats.split()])
 
@@ -122,7 +129,8 @@ def build():
     cmd = shlex.split(compiler) if compiler else (
         [sys.executable, "-m", "ziglang", "c++"] if __import__("importlib.util").util.find_spec("ziglang")
         else [shutil.which("clang++") or shutil.which("g++") or "c++"])
-    digest = hashlib.sha256(source.read_bytes() + repr(cmd).encode()).hexdigest()[:16]
+    digest = hashlib.sha256(source.read_bytes() + source.with_name("order_program.hpp").read_bytes()
+                             + source.with_name("shock_features.hpp").read_bytes() + repr(cmd).encode()).hexdigest()[:16]
     suffix = ".dll" if os.name == "nt" else ".so"
     lib = folder / f"quant-{digest}{suffix}"
     if not lib.exists():
@@ -159,6 +167,17 @@ def _library():
             lib.sim_run_orders.argtypes = [ptr, ptr, ptr, ptr, ptr, size, ptr, size, ptr, size]
             lib.sim_run_orders.restype = ct.c_int
             lib.sim_terminal.argtypes, lib.sim_terminal.restype = [ptr, ct.c_int64, ptr, size], ct.c_int
+        if hasattr(lib, "sim_run_program"):
+            lib.sim_configure_shock.argtypes = [ptr, ct.POINTER(_ShockConfig)]
+            lib.sim_configure_shock.restype = ct.c_int
+            lib.sim_run_program.argtypes = [ptr, ptr, ptr, ptr, ptr, size, ptr, size, ptr, ptr, ct.c_int64, ct.c_int64]
+            lib.sim_run_program.restype = ct.c_int
+            lib.sim_shock_features_create.argtypes = [size, ct.c_int, ct.c_int]
+            lib.sim_shock_features_create.restype = ptr
+            lib.sim_shock_features_delete.argtypes = [ptr]
+            lib.sim_shock_features_delete.restype = None
+            lib.sim_shock_features_run.argtypes = [ptr, ptr, ptr, ptr, ptr, ptr, size, ptr]
+            lib.sim_shock_features_run.restype = ct.c_int
         for f in ("orders", "cashflows", "targets", "curve"):
             func = getattr(lib, "sim_" + f)
             func.argtypes, func.restype = [ptr, ct.POINTER(size)], ptr
@@ -289,6 +308,30 @@ class Engine:
             raise RuntimeError("Native simulator rejected the order block")
         self.last_time = starts[-1]
 
+    def configure_shock(self, parameters, *, patient):
+        mechanism = ("velocity", "residual", "flow", "residual_flow").index(parameters["mechanism"])
+        config = _ShockConfig(*(parameters.get(name, 0) for name in _ShockConfig._floats),
+                              parameters["side"], mechanism, parameters["dynamic"], patient)
+        if self.lib.sim_configure_shock(self.handle, ct.byref(config)):
+            raise RuntimeError("The native program rejected its configuration")
+
+    def _run_program(self, starts, values, status, opens, funding, columns, readiness, start, cadence):
+        if (not self.handle or len(columns) != 11 or len(starts) == 0 or
+                status.shape != (len(starts), self.n) or readiness.shape != status.shape):
+            raise ValueError("Compiled order axes must match the native block")
+        opens = np.ascontiguousarray(opens, dtype="=f8")
+        readiness = np.ascontiguousarray(readiness).view("u1")
+        columns = [np.ascontiguousarray(x, dtype="=f8") if x is not None else None for x in columns]
+        pointers = (ct.c_void_p * len(columns))(*(x.ctypes.data if x is not None else None for x in columns))
+        rc = self.lib.sim_run_program(
+            self.handle, starts.ctypes.data, values.ctypes.data, status.ctypes.data, opens.ctypes.data,
+            len(starts), funding.ctypes.data, len(funding), pointers, readiness.ctypes.data, start, cadence,
+        )
+        if rc:
+            self.close()
+            raise RuntimeError("Native strategy rejected the block")
+        self.last_time = starts[-1]
+
     def terminal(self, end, requests=()):
         requests = np.ascontiguousarray(list(requests), dtype=REQUEST)
         if (not self.handle or not isinstance(self.settings, OrderSettings) or self.last_time is None
@@ -345,3 +388,53 @@ class Engine:
         out = np.empty(1, dtype=RISK)
         self.lib.sim_risk(self.handle, out.ctypes.data)
         return out[0]
+
+
+class ShockFeatureStream:
+    def __init__(self, symbols, *, flow, price_range):
+        self.lib = library()
+        self.handle = self.lib.sim_shock_features_create(symbols, flow, price_range)
+        if not self.handle:
+            raise MemoryError("Native shared feature state could not be allocated")
+
+    def close(self):
+        if self.handle:
+            self.lib.sim_shock_features_delete(self.handle)
+            self.handle = None
+
+    def advance(self, block):
+        arrays = [np.ascontiguousarray(block.values[key], dtype="=f8") for key in
+                  ("close", "quote_volume", "buy_quote_volume", "sell_quote_volume")]
+        result = np.empty((11, *block.status.shape), dtype="=f8")
+        if self.lib.sim_shock_features_run(self.handle, *(arr.ctypes.data for arr in arrays),
+                                          block.status.ctypes.data, len(block.status), result.ctypes.data):
+            raise RuntimeError("Native shared feature computation failed")
+        return result
+
+
+class _OrderTape:
+    """Borrow validated block axes once for trusted block-major order callbacks."""
+
+    def __init__(self, engine, starts, market, flags, opens, funding):
+        self.engine = engine
+        opens = np.ascontiguousarray(opens, dtype="=f8")
+        self.owners = (starts, market, flags, opens, funding)
+        self.addresses = tuple(x.ctypes.data for x in self.owners)
+        self.strides = tuple(x.strides[0] if len(x) else x.dtype.itemsize for x in self.owners)
+        self.end_funding = np.searchsorted(funding["ms"], starts + engine.settings.interval)
+
+    def run(self, lo, hi, funds_lo, funds_hi, requests):
+        sim = self.engine
+        lr = len(requests)
+        data = np.asarray(requests, dtype=REQUEST) if lr else None
+        starts, market, status, opens, funding = (
+            addr + pos * stride for addr, pos, stride in zip(
+                self.addresses, (lo, lo, lo, lo, funds_lo), self.strides, strict=True
+            )
+        )
+        rc = sim.lib.sim_run_orders(sim.handle, starts, market, status, opens, hi-lo, funding,
+                                    funds_hi-funds_lo, data.ctypes.data if lr else None, lr)
+        if rc:
+            sim.close()
+            raise RuntimeError("Native simulator rejected the order slice")
+        sim.last_time = self.owners[0][hi-1]

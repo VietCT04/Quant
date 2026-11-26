@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from time import perf_counter
 
 import numpy as np
@@ -50,6 +52,7 @@ class MarketDataFeed:
             raise ValueError("A nonempty universe and interval-aligned UTC range are required")
         self.block_steps = block_steps
         self.read_threads = True
+        self.read_workers = 1
         self.profile = dict(parquet_and_slicing_seconds=0., alignment_and_marks_seconds=0.)
         if mark_staleness_ms < 1:
             raise ValueError("Mark staleness limit must be positive")
@@ -64,10 +67,27 @@ class MarketDataFeed:
             if row["status"] in {"quarantined_source_conflict", "official_aggtrade_gap", "failed_validation"}:
                 coverage[row["symbol"]].append((row["start_ms"], row["end_ms"]))
         self.quarantine = [np.array(sorted(coverage[s]), dtype="i8").reshape(-1, 2) for s in self.symbols]
-        self.settlements, self.funding_warnings = self._settlements()
+        self._funding = None
         self.cursor = 0
         self.mark_missing_slots = np.zeros(len(self.symbols), dtype="i8")
         self.status_counts = np.zeros((5, len(self.symbols)), dtype="i8")
+
+    def _funding_data(self):
+        if self._funding is None:
+            self._funding = self._settlements()
+        return self._funding
+
+    @property
+    def settlements(self):
+        return self._funding_data()[0]
+
+    @property
+    def funding_warnings(self):
+        return self._funding_data()[1]
+
+    def use_funding(self, settlements, warnings):
+        self._funding = settlements, warnings
+        self.cursor = 0
 
     def _settlements(self):
         pieces, warnings = [], []
@@ -124,48 +144,74 @@ class MarketDataFeed:
     def blocks(self, *, shared=False, projected=()):
         fields = tuple(dict.fromkeys((*FIELDS, *projected)))
         source = self.dataset.iter_symbol_slices(self.symbols, self.start, self.end, fields,
-                                                 time_steps=self.block_steps, use_threads=self.read_threads)
-        while True:
-            now = perf_counter()
-            piece = next(source, None)
-            self.profile["parquet_and_slicing_seconds"] += perf_counter() - now
-            if piece is None:
-                break
-            lo, hi, samples = piece
-            now = perf_counter()
-            starts = np.arange(lo, hi, self.step, dtype="i8")
-            clock = starts + self.step + self.lag
-            clock_minute = (clock - 100) // MINUTE
-            minute_keys = (np.arange(clock_minute[0], clock_minute[-1] + 1) * MINUTE) + 100
-            minute_index = clock_minute - clock_minute[0]
-            values = np.full((len(starts), len(self.symbols), 4 if shared else 5), np.nan)
-            flags = np.full(values.shape[:2], MISSING, dtype="u1")
-            extras = {name: np.full(flags.shape, np.nan) for name in projected}
-            for i, (symbol, table) in enumerate(samples.items()):
-                intervals = self.quarantine[i]
-                state = flags[:, i]
-                if len(intervals) and intervals[0, 0] <= starts[-1] and intervals[-1, 1] > starts[0]:
-                    j = np.searchsorted(intervals[:, 0], starts, side="right") - 1
-                    state[(j >= 0) & (starts < intervals[j, 1])] = QUARANTINED
-                state[starts + self.step <= self.listing[i]] = PRELISTING
-                if table is not None:
-                    offsets = (table["timestamp_ms"].to_numpy() - lo) // self.step
-                    close, vol, quote, empty = (table[name].to_numpy() for name in FIELDS)
-                    if self.completed_clock:
-                        allowed = state[offsets] == MISSING
-                        offsets, close, vol, quote, empty = (x[allowed] for x in (offsets, close, vol, quote, empty))
-                    state[offsets] = np.where(empty, EMPTY, TRADED)
-                    values[offsets, i, 0] = close
-                    values[offsets, i, 1] = np.divide(quote, vol, out=np.full_like(vol, np.nan), where=vol > 0)
-                    values[offsets, i, 2] = vol
-                    for name, projection in extras.items():
-                        column = table[name].to_numpy()
-                        projection[offsets, i] = column[allowed] if self.completed_clock else column
-                if self.aux and state[-1] != PRELISTING:
-                    self._fill_marks(symbol, starts, clock, minute_keys, minute_index, values[:, i, 3])
-                values[state == PRELISTING, i, 3] = np.nan
-                actual = starts >= self.trading_start
-                self.mark_missing_slots[i] += np.count_nonzero(~np.isfinite(values[:, i, 3]) & (state != PRELISTING) & actual)
-                self.status_counts[:, i] += np.bincount(state[actual], minlength=5)
-            self.profile["alignment_and_marks_seconds"] += perf_counter() - now
-            yield (starts, values, flags, extras) if projected else (starts, values, flags)
+                                                 time_steps=self.block_steps, use_threads=self.read_threads, workers=self.read_workers)
+        alignment_groups = [range(i, len(self.symbols), self.read_workers) for i in range(self.read_workers)]
+        manager = ThreadPoolExecutor(max_workers=self.read_workers) if self.read_workers > 1 else nullcontext()
+        with manager as align_pool:
+            while True:
+                now = perf_counter()
+                piece = next(source, None)
+                self.profile["parquet_and_slicing_seconds"] += perf_counter() - now
+                if piece is None:
+                    break
+                lo, hi, samples = piece
+                now = perf_counter()
+                starts = np.arange(lo, hi, self.step, dtype="i8")
+                clock = starts + self.step + self.lag
+                clock_minute = (clock - 100) // MINUTE
+                minute_keys = (np.arange(clock_minute[0], clock_minute[-1] + 1) * MINUTE) + 100
+                minute_index = clock_minute - clock_minute[0]
+                cols = 4 if shared else 5
+                # Populate contiguous per-symbol runs, then pack the native time-major block once.
+                n, ticks = len(self.symbols), len(starts)
+                values = np.full((n, ticks, cols), np.nan)
+                flags = np.full((n, ticks), MISSING, dtype="u1")
+                extras = {name: np.full((n, ticks), np.nan) for name in projected}
+                actual_start = int(np.searchsorted(starts, self.trading_start))
+                def align(i, symbol, table):
+                    intervals = self.quarantine[i]
+                    state = flags[i]
+                    has_quarantine = len(intervals) and intervals[0, 0] <= starts[-1] and intervals[-1, 1] > starts[0]
+                    if has_quarantine:
+                        j = np.searchsorted(intervals[:, 0], starts, side="right") - 1
+                        state[(j >= 0) & (starts < intervals[j, 1])] = QUARANTINED
+                    has_prelisting = starts[0] + self.step <= self.listing[i]
+                    if has_prelisting:
+                        state[:int(np.searchsorted(starts, self.listing[i] - self.step, side="right"))] = PRELISTING
+                    if table is not None:
+                        offsets = (table["timestamp_ms"].to_numpy() - lo) // self.step
+                        close, vol, quote, empty = (table[name].to_numpy() for name in FIELDS)
+                        allowed = None
+                        if self.completed_clock and (has_quarantine or has_prelisting):
+                            allowed = state[offsets] == MISSING
+                            offsets, close, vol, quote, empty = (x[allowed] for x in (offsets, close, vol, quote, empty))
+                        state[offsets] = np.where(empty, EMPTY, TRADED)
+                        values[i, offsets, 0] = close
+                        values[i, offsets, 1] = np.divide(quote, vol, out=np.full_like(vol, np.nan), where=vol > 0)
+                        values[i, offsets, 2] = vol
+                        for name, projection in extras.items():
+                            column = table[name].to_numpy()
+                            projection[i, offsets] = column if allowed is None else column[allowed]
+                    if self.aux and state[-1] != PRELISTING:
+                        self._fill_marks(symbol, starts, clock, minute_keys, minute_index, values[i, :, 3])
+                    if has_prelisting:
+                        values[i, state == PRELISTING, 3] = np.nan
+                    actual = state[actual_start:]
+                    self.mark_missing_slots[i] += np.count_nonzero(
+                        ~np.isfinite(values[i, actual_start:, 3]) & (actual != PRELISTING)
+                    )
+                    self.status_counts[:, i] += np.bincount(actual, minlength=5)
+                if align_pool is None:
+                    for i, (symbol, table) in enumerate(samples.items()):
+                        align(i, symbol, table)
+                else:
+                    def align_group(group):
+                        for i in group:
+                            symbol = self.symbols[i]
+                            align(i, symbol, samples[symbol])
+                    list(align_pool.map(align_group, alignment_groups))
+                values = np.ascontiguousarray(values.transpose(1, 0, 2))
+                flags = np.ascontiguousarray(flags.T)
+                extras = {name: np.ascontiguousarray(x.T) for name, x in extras.items()}
+                self.profile["alignment_and_marks_seconds"] += perf_counter() - now
+                yield (starts, values, flags, extras) if projected else (starts, values, flags)

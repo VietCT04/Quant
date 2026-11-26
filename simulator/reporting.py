@@ -141,10 +141,22 @@ def order_lifecycles(folder, symbols, positions, end):
 
     net, duration, returns = [], [], []
     details = {}
+    paths = [folder / f"{table}.parquet" for table in ("fills", "funding")]
+
+    def uncompressed(path):
+        with pq.ParquetFile(path) as file:
+            m = file.metadata
+            return sum(m.row_group(i).total_byte_size for i in range(m.num_row_groups))
+
+    # Read and partition small event logs once instead of decoding every row group per symbol.
+    grouped = ([pl.read_parquet(path).partition_by("symbol", as_dict=True) for path in paths]
+               if sum(map(uncompressed, paths)) <= 64 << 20 else None)
     for i, symbol in enumerate(symbols):
-        queries = (pl.scan_parquet(folder / f"{table}.parquet").filter(pl.col("symbol") == i)
-                   for table in ("fills", "funding"))
-        fills, flows = (query.collect(engine="streaming").iter_rows(named=True) for query in queries)
+        if grouped is None:
+            queries = (pl.scan_parquet(path).filter(pl.col("symbol") == i) for path in paths)
+            fills, flows = (query.collect(engine="streaming").iter_rows(named=True) for query in queries)
+        else:
+            fills, flows = (group[(i,)].iter_rows(named=True) if (i,) in group else () for group in grouped)
         entries, _, _ = reconstruct(symbol, fills, flows, record(positions[i]), end, detail=False)
         closed = [row for row in entries if row["state"] == "closed"]
         net.extend(row["net_pnl"] for row in closed)

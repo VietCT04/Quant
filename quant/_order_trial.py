@@ -1,14 +1,34 @@
 """Order scheduling and reporting within the existing block-major trial."""
 
 from collections import Counter
+import math
+import os
 from time import perf_counter
 
 import numpy as np
 
 from marketdata.model import DAY
+from simulator.native import _OrderTape
 from simulator.reporting import Logs, order_lifecycles, record
 from .explorer_ledger import REASONS
 from .strategy import Portfolio
+
+
+# Version alone is insufficient for authorizing a compiled implementation.
+SHOCK_IMPLEMENTATIONS = {
+    "1.0.0": "4b079ad1b63ad60dbc4f80d65c6358e007e9b0dac8b39e97281db34824d24732",
+    "2.0.0": "46aba4300284a5be8a0455dac2de09f5f357ac9de23c6a69e89f0c093d281545",
+}
+SHOCK_COLUMNS = ("close", "fast", "move", "old_fast", "prior_vol", "trend", "fair",
+                 "aggression", "volume_current", "volume_prior", "prior_range_edge")
+
+
+def observed_warmup(status, close, previous, warm):
+    valid = (status <= 1) & np.isfinite(close)
+    axis = np.arange(len(status), dtype="i8")[:, None]
+    last_invalid = np.maximum.accumulate(np.where(valid, -previous - 1, axis), axis=0)
+    runs = axis - last_invalid
+    return valid & (runs >= warm), runs[-1].copy()
 
 
 class OrderTrial:
@@ -20,7 +40,7 @@ class OrderTrial:
         self.pending = []
         self.outcomes = []
         self.next_id = 1
-        self.counts = Counter()
+        self.counts = Counter(submitted=0, filled=0, rejected=0, terminal=0, liquidations=0)
         self.rejections = Counter()
         self.rejected_symbols = Counter()
         self.requested_notional = self.filled_notional = 0.0
@@ -33,6 +53,15 @@ class OrderTrial:
         self.ledger = trial.logs or Logs(trial.directory / ".summary-ledger", self.symbols)
         self.audit = trial.logs is not None
         self.sealed = False
+        runner = trial.candidate.decision
+        self.compiled = (not self.audit and not trial.settings.latency
+                         and os.getenv("QUANT_ORDER_ENGINE") != "python"
+                         and hasattr(trial.engine.lib, "sim_run_program")
+                         and runner.strategy.id == "shock_inventory_recovery"
+                         and SHOCK_IMPLEMENTATIONS.get(runner.strategy.version) is not None
+                         and SHOCK_IMPLEMENTATIONS[runner.strategy.version] == runner.receipt.get("implementation_hash"))
+        if self.compiled:
+            trial.engine.configure_shock(runner.parameters, patient=runner.strategy.version == "2.0.0")
 
     def advance(self, starts, market, status, funding, block):
         trial = self.trial
@@ -46,37 +75,33 @@ class OrderTrial:
         signal_time = engine_time = output_time = 0.0
         begin = first
         warm = decision.plan.warmup_bars
-        prev_run = decision.last_valid_run
-        valid = (status <= 1) & np.isfinite(market[:, :, 0])
-        axis = np.arange(len(starts), dtype="i8")[:, None]
-        last_invalid = np.maximum.accumulate(np.where(valid, -prev_run - 1, axis), axis=0)
-        runs = axis - last_invalid
-        decision.last_valid_run = runs[-1]
-        if warm:
-            observed = (runs[first:] >= warm) & valid[first:]
-        else:
+        shared = getattr(block, "_order_readiness", None)
+        if shared is None:
+            valid, decision.last_valid_run = observed_warmup(status, market[:, :, 0], decision.last_valid_run, warm)
             observed = valid[first:]
+            qualified = None
+        else:
+            observed = shared[0][first:]
+            qualified = shared[1][first:]
         for i, n in enumerate(np.count_nonzero(~observed, axis=0)):
             self.warmup[self.symbols[i]] += int(n)
+
+        if not self.compiled:
+            tape = _OrderTape(engine, starts, market, status, block.values["open"], funding)
 
         def run(stop):
             nonlocal begin, funding_cursor, engine_time, output_time
             started = perf_counter()
             end = starts[stop - 1] + trial.settings.interval
-            cursor = np.searchsorted(funding["ms"], end, side="left")
+            cursor = int(tape.end_funding[stop-1])
             count = 0
             while count < len(self.pending) and self.pending[count][0] < end:
                 count += 1
             requests = self.pending[:count]
             del self.pending[:count]
-            engine.run_orders(starts[begin:stop], market[begin:stop], status[begin:stop],
-                              block.values["open"][begin:stop], funding[funding_cursor:cursor], requests)
+            tape.run(begin, stop, funding_cursor, cursor, requests)
             funding_cursor, begin = cursor, stop
             self.book_clock = int(end)
-            self.last_mark_valid = np.isfinite(market[stop - 1, :, 3]) | (
-                bool(trial.settings.trade_mark_fallback) & (status[stop - 1] == 0)
-                & np.isfinite(market[stop - 1, :, 0])
-            )
             engine_time += perf_counter() - started
             started = perf_counter()
             self.collect()
@@ -85,17 +110,37 @@ class OrderTrial:
         cadence = decision.receipt["decision_ticks"]
         base = int((starts[0] - self.start) // block.interval_ms)
         offset = first + (-(base + first) % cadence)
+        if qualified is None:
+            qualified = observed.copy()
+            for name in decision.plan.features:
+                qualified &= np.isfinite(block.values[name][first:])
+        counts = np.count_nonzero(~qualified[offset-first::cadence], axis=0)
+        for name, count in zip(self.symbols, counts):
+            if count:
+                self.skipped[name] += int(count)
+        if first < len(starts):
+            self.last_mark_valid = np.isfinite(market[-1, :, 3]) | (
+                bool(trial.settings.trade_mark_fallback) & (status[-1] == 0) & np.isfinite(market[-1, :, 0])
+            )
+        if self.compiled and first < len(starts):
+            clock = perf_counter()
+            engine._run_program(starts[first:], market[first:], status[first:], block.values["open"][first:], funding,
+                               [block.values[name][first:] if name in block.values else None for name in SHOCK_COLUMNS],
+                               qualified, self.start, cadence)
+            self.book_clock = int(starts[-1] + trial.settings.interval)
+            engine_time = perf_counter() - clock
+            clock = perf_counter()
+            self.collect(cuts=starts[offset::cadence] + trial.settings.interval)
+            self.flush()
+            return 0, engine_time, perf_counter() - clock
+
         for row in range(offset, len(starts), cadence):
             run(row + 1)
             started = perf_counter()
             equity = engine.equity()
             positions = engine.positions()
             positions.flags.writeable = False
-            ready = observed[row - first].copy()
-            for name in decision.plan.features:
-                ready &= np.isfinite(block.values[name][row])
-            for i in np.flatnonzero(~ready):
-                self.skipped[self.symbols[i]] += 1
+            ready = qualified[row - first]
             portfolio = Portfolio(self.book_clock, positions, float(equity["equity"]),
                                   float(equity["wallet"]), float(equity["available"]), tuple(self.outcomes),
                                   trial.settings.leverage, tuple(s for s, ok in zip(self.symbols, ready) if ok))
@@ -117,9 +162,15 @@ class OrderTrial:
             self.flush()
         return signal_time, engine_time, output_time
 
-    def collect(self, *, terminal=False):
+    def collect(self, *, terminal=False, cuts=None):
         trial = self.trial
         orders = trial.engine.orders()
+
+        if not self.audit and not terminal and not len(orders):
+            trial._record_daily()
+            self.buffer("fills", orders)
+            self.buffer("funding", trial.engine.cashflows())
+            return
         fills = orders[orders["filled"] != 0]
         submitted = orders[orders["id"] != 0]
         accepted = submitted[submitted["filled"] != 0]
@@ -127,16 +178,32 @@ class OrderTrial:
         self.counts.update(submitted=len(submitted), filled=len(accepted), rejected=len(rejected),
                            terminal=int(np.count_nonzero(fills["reason"] == 21)),
                            liquidations=int(np.count_nonzero(fills["reason"] == 22)))
-        self.requested_notional += float(np.nansum(submitted["requested_notional"]))
-        self.filled_notional += float(np.sum(np.abs(accepted["filled"]) * accepted["price"]))
+        if cuts is not None and len(submitted):
+            groups = np.searchsorted(cuts, submitted["ms"], side="right")
+            changes = np.flatnonzero(np.diff(groups)) + 1
+            for piece in np.split(submitted, changes):
+                if len(piece) == 1:
+                    event = piece[0]
+                    if not math.isnan(event["requested_notional"]):
+                        self.requested_notional += float(event["requested_notional"])
+                    if event["filled"]:
+                        self.filled_notional += abs(float(event["filled"])) * float(event["price"])
+                else:
+                    self.requested_notional += float(np.nansum(piece["requested_notional"]))
+                    good = piece[piece["filled"] != 0]
+                    self.filled_notional += float(np.sum(np.abs(good["filled"]) * good["price"]))
+        else:
+            self.requested_notional += float(np.nansum(submitted["requested_notional"]))
+            self.filled_notional += float(np.sum(np.abs(accepted["filled"]) * accepted["price"]))
         for item in rejected:
             self.rejections[str(int(item["reason"]))] += 1
             self.rejected_symbols[self.symbols[item["symbol"]]] += 1
-        for item in orders:
-            value = record(item)
-            value.update(symbol=self.symbols[item["symbol"]], status="filled" if item["filled"] else "rejected",
-                         reason_label=REASONS.get(item["reason"], "Unknown"))
-            self.outcomes.append(value)
+        if not self.compiled:
+            for item in orders:
+                value = record(item)
+                value.update(symbol=self.symbols[item["symbol"]], status="filled" if item["filled"] else "rejected",
+                             reason_label=REASONS.get(item["reason"], "Unknown"))
+                self.outcomes.append(value)
         curve = trial.engine.curve()
         if self.audit or terminal:
             for ms, equity in zip(curve["ms"], curve["equity"]):

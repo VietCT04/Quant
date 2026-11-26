@@ -28,7 +28,7 @@ build-backend = "setuptools.build_meta"
 include = ["quant", "marketdata", "simulator", "research_strategies"]
 
 [tool.setuptools.package-data]
-simulator = ["core.cpp"]
+simulator = ["core.cpp", "*.hpp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
