@@ -1,5 +1,5 @@
 """Only implementations imported and listed here can be submitted to the service."""
 
-from . import ema, flow, momentum, scaling, shock
+from . import ema, flow, momentum, phase5, scaling, shock
 
-STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, scaling.STRATEGY)
+STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, scaling.STRATEGY, phase5.STRATEGY)
