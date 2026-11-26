@@ -17,6 +17,8 @@ LIQUIDITY = {"id": "shock_liquidity_recovery", "version": "1.0.0"}
 CONTEXT = LIQUIDITY | {"version": "2.0.0"}
 ALLOCATED = LIQUIDITY | {"version": "3.0.0"}
 EXTENDED = LIQUIDITY | {"version": "4.0.0"}
+BREAKOUT = {"id": "shock_repricing_breakout", "version": "1.0.0"}
+LEAD_LAG = {"id": "shock_lead_lag", "version": "1.0.0"}
 ROI_SCREEN_GATE = 4 ** .25 - 1
 COMMON = dict(cadence=24, order_usdt=10, depth=.024, minimum_gap=.016,
               patient_minutes=18, hold_minutes=720, step=.004, retrace=.50, stop=2.5)
@@ -156,6 +158,42 @@ def retention_candidates():
         yield name, prediction, best | overrides, EXTENDED, None
 
 
+def repricing_candidates():
+    hypotheses = [
+        ("Upside shock with prior strength", "An unusual upside shock in a rising market can reveal persistent demand.",
+         dict(alignment=.02, hold=96)),
+        ("Upside shock after a weak day", "A large upside shock can signal a durable reversal of earlier selling.",
+         dict(depth=.045, alignment=-.12, hold=144, trail=.09)),
+        ("Wide upside repricing", "Exceptional shocks can support concentrated positions over several days.",
+         dict(depth=.07, sigma=3.5, trail=.12, hold=168, slots=2, fraction=.47)),
+        ("Frequent upside repricing", "More moderate shocks in a strong prior trend can compound.",
+         dict(depth=.018, sigma=2, alignment=.035, hold=48, trail=.045)),
+        ("Downside continuation", "An isolated positive-volatility downside shock may accompany persistent de-risking.",
+         dict(side=-1, depth=.035, hold=72, trail=.06)),
+        ("Wide downside repricing", "Large negative shocks can start sustained losses that favor short positions.",
+         dict(side=-1, depth=.065, sigma=3.5, trail=.10, hold=120, slots=2, fraction=.47)),
+    ]
+    for name, prediction, overrides in hypotheses:
+        yield name, prediction, overrides, BREAKOUT, None
+
+
+def propagation_candidates():
+    variants = [
+        ("BTC upside / lagged adjustment", "BTC upside shocks can propagate to lagging contracts.",
+         dict(shock=.018, relative=.008, hold=36)),
+        ("BTC upside / multi-day propagation", "Large BTC repricing can lead slow adjustment over several days.",
+         dict(shock=.029, relative=.013, hold=96, trail=.09, slots=3, fraction=.32)),
+        ("BTC downside / lagged adjustment", "BTC downside shocks can lead delayed selling.",
+         dict(side=-1, shock=.018, relative=.008, hold=36)),
+        ("Resilience / sharp capitulation", "Coins resilient during a broad fall can lead the rebound when BTC turns up.",
+         dict(mode="resilience", shock=.035, relative=.013, hold=72, trail=.07)),
+        ("Resilience / broad reset", "A larger market liquidation can start a longer recovery in resilient coins.",
+         dict(mode="resilience", shock=.055, relative=.020, hold=144, trail=.095, slots=3, fraction=.32)),
+    ]
+    for name, prediction, params in variants:
+        yield name, prediction, params, LEAD_LAG, None
+
+
 def promoted_candidates(port, ids, screening_selection, *, roi=False):
     fingerprint = q.data.fingerprint(screening_selection)
     for hypothesis in ids:
@@ -169,7 +207,8 @@ def promoted_candidates(port, ids, screening_selection, *, roi=False):
                 continue
             spec = trial["specification"]
             strategy = {key: spec["strategy"][key] for key in ("id", "version")}
-            if (strategy not in (STRATEGY, LIQUIDITY, CONTEXT, ALLOCATED, EXTENDED) or spec["seed"] != 716 or spec["costs"]
+            if (strategy not in (STRATEGY, LIQUIDITY, CONTEXT, ALLOCATED, EXTENDED, BREAKOUT, LEAD_LAG)
+                    or spec["seed"] != 716 or spec["costs"]
                     or (spec["start_ms"], spec["end_ms"]) != (screening_selection.start, screening_selection.end)
                     or tuple(spec["universe"]) != screening_selection.symbols
                     or spec["dataset_fingerprint"] != fingerprint):
@@ -183,8 +222,8 @@ def promoted_candidates(port, ids, screening_selection, *, roi=False):
 
 
 def submit(port, output, promotion=(), *, liquidity=False, followup=False, context=False,
-           tail=False, roi=False, extension=False, retention=False):
-    roi = roi or extension or retention
+           tail=False, roi=False, extension=False, retention=False, repricing=False, propagation=False):
+    roi = roi or extension or retention or repricing or propagation
     dates = FULL if promotion else SCREEN
     source = request(port, "/service")["coverage"]["source"]
     dataset = q.data.open(source)
@@ -192,7 +231,9 @@ def submit(port, output, promotion=(), *, liquidity=False, followup=False, conte
     protocol = dict(start=selection.start, end=selection.end, universe=selection.symbols,
                     dataset_fingerprint=q.data.fingerprint(selection), seed=716, costs={})
     candidates = (promoted_candidates(port, promotion, q.data.select(dataset, start=SCREEN[0], end=SCREEN[1]), roi=roi)
-                  if promotion else retention_candidates() if retention else
+                  if promotion else propagation_candidates() if propagation else
+                  repricing_candidates() if repricing else
+                  retention_candidates() if retention else
                   extension_candidates() if extension else allocated_candidates() if roi else
                   liquidity_candidates() if liquidity else
                   context_candidates() if context else
@@ -202,6 +243,10 @@ def submit(port, output, promotion=(), *, liquidity=False, followup=False, conte
             {"promotion_minimum_net_sharpe": 2.0, "promotion_requires_positive_roi": True})
     definition = ("Accumulate equity-proportional inventory during a causal adverse shock and distribute into recovery."
                   if roi else "Use 10 USDT orders with causal adverse additions and recovery reductions.")
+    if repricing:
+        definition = "Rank signed hourly shocks scaled by prior volatility and hold explicit positions until a trailing exit or expiry."
+    if propagation:
+        definition = "Trade relative response to a BTC shock or resilience after a broad liquidation using completed hourly bars."
     hypotheses = [
         dict(name=name, family="Shock inventory", stage="simulation", mechanism=prediction, prediction=prediction,
              definition=definition,
@@ -213,7 +258,9 @@ def submit(port, output, promotion=(), *, liquidity=False, followup=False, conte
     ]
     if not hypotheses:
         raise ValueError("No completed candidate meets the recorded promotion gate")
-    stage = ("full archive" if promotion else "recovered inventory retention" if retention else
+    stage = ("full archive" if promotion else "cross-market propagation" if propagation else
+             "persistent repricing" if repricing else
+             "recovered inventory retention" if retention else
              "recovery follow-through" if extension else
              "equity-proportional inventory" if roi else
              "frozen reference round" if liquidity else
@@ -240,6 +287,8 @@ def main():
     mode.add_argument("--roi", action="store_true")
     mode.add_argument("--extension", action="store_true")
     mode.add_argument("--retention", action="store_true")
+    mode.add_argument("--repricing", action="store_true")
+    mode.add_argument("--propagation", action="store_true")
     mode.add_argument("--liquidity", action="store_true")
     mode.add_argument("--followup", action="store_true")
     mode.add_argument("--context", action="store_true")
@@ -248,7 +297,7 @@ def main():
     print(json.dumps(submit(args.port, args.out, args.promote or args.promote_roi,
                             liquidity=args.liquidity, followup=args.followup, context=args.context,
                             tail=args.tail, roi=args.roi or bool(args.promote_roi), extension=args.extension,
-                            retention=args.retention)), flush=True)
+                            retention=args.retention, repricing=args.repricing, propagation=args.propagation)), flush=True)
 
 
 if __name__ == "__main__":
