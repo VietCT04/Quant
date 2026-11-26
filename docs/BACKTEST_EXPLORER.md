@@ -35,6 +35,8 @@ The Explorer evaluates the original registered feature graph using the native fe
 
 Candles, features, symbol exposure, symbol P&L, and portfolio performance share a synchronized timeline. Requested target and native quantity and entry are displayed as booked steps when the window fits the exact-step budget. Symbol marked notional and P&L use the last native sample in each complete bucket and require a fresh mark when exposure is open. Portfolio equity, exposure, and recorded maximum drawdown come from the native equity artifact. Downsampling retains first, last, minimum, and maximum observations per metric and bucket.
 
+Registered strategies expose [audit-time observations](STRATEGY_AUTHORING.md) directly from their strategy trace. The Explorer uses their generic plot descriptors and shows a matched strategy rationale alongside the simulator reason. Exact booked targets and executions remain in the separate native ledgers.
+
 ## Detailed replay
 
 Summary mode remains the default. **Generate detailed replay** queues one audit through the research service. The Explorer attaches committed detailed artifacts through existing SSE lifecycle updates. The same outcome appears in the Research Inbox. Repeated requests return the same receipt.

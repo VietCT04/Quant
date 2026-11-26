@@ -12,6 +12,8 @@ uv run pytest -q
 
 Use the [API reference](API_REFERENCE.md), [function catalog](FUNCTION_CATALOG.json) or `q.registry` for the current inventory, including public types, aliases and streaming support. Regenerate both published inventories with `uv run python -m quant catalog`. Use the [Phase 4 execution guide](RESEARCH_ENGINE.md) for batch simulation, diagnostics and the durable scheduler.
 
+For asynchronously queued, versioned implementations, see the [strategy authoring contract](STRATEGY_AUTHORING.md). It covers typed parameters, shared causal graphs, vector targets, native position feedback, and detailed replay.
+
 ## Streaming a simulator experiment
 
 ```python

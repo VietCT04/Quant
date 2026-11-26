@@ -74,6 +74,10 @@ Screen options include `horizon`, `method`, `groups`, and `event_threshold`. Nat
 
 Ordinary requests pass the existing development gate. The control center exposes development selection, descriptive screening, and native replay. Audit replay uses the same development gate.
 
+### Registered strategies
+
+Use the [strategy authoring contract](STRATEGY_AUTHORING.md) and **quant research strategies** to discover the trusted registry. Candidate JSON may select a versioned strategy and supply typed parameters. The submission freezes the exact implementation, graph and parameter values before queueing.
+
 ## Backtest Explorer
 
 Open a completed native candidate from Alpha Results, hypothesis or trial details, or Research Inbox. The [Backtest Explorer guide](BACKTEST_EXPLORER.md) covers audited candles, reconciled positions, synchronized panels, and exact replay.

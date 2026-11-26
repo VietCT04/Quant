@@ -59,6 +59,10 @@ Data coverage, manifests and tests remain the evidence for these baselines. Simu
 
 The [Backtest Explorer](docs/BACKTEST_EXPLORER.md) links native candidate results to audited candles, recorded fills, execution timelines, reconciled positions, and synchronized signal and portfolio panels. Detailed replay uses the existing queue and leaves ordinary research in summary mode.
 
+### Registered strategy interface
+
+The [strategy authoring contract](docs/STRATEGY_AUTHORING.md) supports reviewed local modules, frozen implementations, shared SDK graphs, parameterized queued jobs, and generic audit traces. The five reference modules verify development screening, replay, multi-symbol signals, and actual-position feedback. Automated discovery remains an owner-authorized phase.
+
 ## Phase 5 · Authorized automated alpha discovery
 
 **Dependencies.** Explicit owner authorization, verified scheduler and resource limits, an accepted capability and experiment registry, and tested chronological evaluation boundaries.
