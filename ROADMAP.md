@@ -65,6 +65,8 @@ The [strategy authoring contract](docs/STRATEGY_AUTHORING.md) supports reviewed 
 
 ## Phase 5 · Authorized automated alpha discovery
 
+**Current research.** The owner authorized development-only discovery. See the [research knowledge base](research/phase5/KNOWLEDGE.md) for registered campaigns, findings and unresolved hypotheses.
+
 **Dependencies.** Explicit owner authorization, verified scheduler and resource limits, an accepted capability and experiment registry, and tested chronological evaluation boundaries.
 
 **Acceptance criteria**
