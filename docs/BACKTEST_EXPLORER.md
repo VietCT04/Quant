@@ -13,6 +13,8 @@ Price and volume come from the audited five-second Parquet reader. Complete UTC 
 
 ## Execution clocks and accounting
 
+V2 audit records use the modeled next-open timestamp. Order detail includes the native order ID, rounded quantity, requested notional and available buying power. END_OF_BACKTEST is an explicitly virtual closing fill with no following market bar. Terminal position results include that fill and its fees. Legacy records retain the clock semantics below.
+
 | Field | Meaning |
 |---|---|
 | Decision input bar start | Decision clock minus the native interval and availability lag. The order artifact does not distinguish a strategy signal from a risk override. |

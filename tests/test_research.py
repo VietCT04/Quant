@@ -68,6 +68,7 @@ def market(tmp_path):
             pa.table(
                 {
                     "timestamp_ms": t[keep],
+                    "open": close[keep],
                     "close": close[keep],
                     "volume": volume[keep],
                     "quote_volume": (close * volume)[keep],
@@ -211,7 +212,7 @@ def test_shared_cache_publication_and_readers(market, tmp_path):
         list(prepared(market, _feed(market, 5), tmp_path / "too-small", 1, {}))
 
 
-def test_resource_limits_holdout_and_independent_failure(market, tmp_path):
+def test_resource_limits_research_dates_and_independent_failure(market, tmp_path):
     valid = q.simulator.Candidate("ok", allocation=(0.0, 0.0))
     broken = q.simulator.Candidate("bad", lambda block: np.array(2.0))
     ran = q.simulator.run_batch(
@@ -229,15 +230,10 @@ def test_resource_limits_holdout_and_independent_failure(market, tmp_path):
         market, [valid], out=tmp_path / "stop", workers=1, cancel=event
     )
     assert stopped.failures == {"ok": "cancelled"}
-    with pytest.raises(PermissionError):
-        q.simulator.run_batch(
-            replace(
-                market, start=q.validation.HOLDOUT_START, end=q.validation.HOLDOUT_END
-            ),
-            [valid],
-            out=tmp_path / "holdout",
-            workers=1,
-        )
+    late = q.validation.HOLDOUT_START
+    recent = q.simulator.run_batch(replace(market, start=late, end=late + 30_000), [valid],
+                                  out=tmp_path / "recent", workers=1)
+    assert recent.results["ok"].report["bar_range_ms"] == [late, late + 30_000]
     with pytest.raises(ValueError, match="Worker"):
         list(q.optimize.parallel(abs, [-1], workers=2, cpu_limit=1))
     missing = q.features.expression("quant.ts.ema", "unprojected", span=3, units="USDT")

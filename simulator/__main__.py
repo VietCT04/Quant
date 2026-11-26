@@ -22,8 +22,6 @@ def backtest(feed, settings, strategy, out):
 
 
 def _backtest(feed, settings, strategy, out, *, release=None):
-    if feed.end > as_millis(HOLDOUT) and release is None:
-        raise ValueError(f"Strategy evaluation must end at or before {HOLDOUT} UTC")
     if (feed.step, feed.lag) != (settings.interval, settings.lag) or settings.logging != 1:
         raise ValueError("Backtests require logging and the feed's interval and availability lag")
     t = perf_counter()

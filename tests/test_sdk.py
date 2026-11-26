@@ -510,8 +510,8 @@ def test_blocks_resampling_and_labels():
         q.data.align(block, replace(block, symbols=("B", "A")))
     with pytest.raises(ValueError, match="availability"):
         q.simulator.targets(block, value, available_at_ms=block.timestamps_ms)
-    with pytest.raises(PermissionError):
-        q.evaluate.forward_returns(panel(value, start=as_millis("2026-08-25")), 1)
+    late = q.evaluate.forward_returns(panel(value, start=as_millis("2026-08-25")), 1)
+    assert_allclose(q.evaluate.research_values(late)[0, 0], .2)
 
 
 def test_resample_ohlcv_and_unknown():
@@ -584,8 +584,8 @@ def test_predictive_diagnostics_and_validation(tmp_path):
     )
     assert len(windows) == 4 and windows[1].train == (0, 29000)
     assert v.chronological_split(0, 10, 20, 30).test == (20, 30)
-    with pytest.raises(PermissionError):
-        v.chronological_split("2026-07-01", "2026-07-02", "2026-08-25", "2026-11-25")
+    full = v.chronological_split("2026-07-01", "2026-07-02", "2026-08-25", "2026-11-25")
+    assert full.test == (v.HOLDOUT_START, v.RESEARCH_END)
     with pytest.raises(ValueError):
         v.record_final_release(
             tmp_path / "release.json", owner_authorization="", frozen_spec={}

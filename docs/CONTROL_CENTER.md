@@ -1,6 +1,6 @@
 # Quant Research Control Center
 
-The control center runs predeclared development hypotheses in a detached local service. An accepted submission has a durable hypothesis ID and one experiment ID per trial. You can close the terminal and browser while the service runs. Review outcomes in the inbox when you return.
+The control center runs native research hypotheses in a detached local service. The initial six-month and full-history windows and priorities are in the [research protocol](RESEARCH_PROTOCOL.md). An accepted submission has a durable hypothesis ID and one experiment ID per trial. You can close the terminal and browser while the service runs. Review outcomes in the inbox when you return.
 
 ## Start and stop
 
@@ -26,7 +26,7 @@ The default home is `data/quant-control` with `research.sqlite`, `service.log`, 
 
 ## Asynchronous CLI
 
-Generate the documented **fixed infrastructure fixture**, or provide your own predeclared specification.
+Generate the legacy fixed infrastructure fixture for testing, or submit order-based research with the V2 example from the strategy authoring guide.
 
 ```sh
 uv run python -m examples.control_campaign data/quant-control/hypotheses.json
@@ -109,6 +109,12 @@ One dispatcher holds the existing exclusive local lease. HTTP submissions wake i
 The highest-priority eligible trial selects the next wave. The scheduler groups compatible jobs by trusted handler, dataset fingerprint, ordered universe, time range, and applicable shared diagnostic or cache options. Screening shares decoded market blocks, feature nodes, and forward labels. Native jobs share the existing block-major replay. Audit jobs run singly. CPU and memory budgets apply to the next wave and native report and prepared-cache reservations use the existing disk checks. The disk budget applies to active reservations and prepared cache. Retained experiment artifacts and SQLite history accumulate on disk.
 
 The overview reports finished trials separately from market-range processing. The queue distinguishes first wait, combined execution time, and total elapsed time in the detail panel. The results view keeps descriptive diagnostics and native reports distinct. Side-by-side comparison uses completed trials with the same handler, selection, and evaluation protocol. Cost differences remain visible. Robustness panels show recorded subperiod evidence. Research verdicts require separate review.
+
+## V2 native results
+
+Use the native results tab for ROI, UTC daily Sharpe, drawdown, net P&L, position and execution counts, profit factor, win rate and execution success. Sort or filter within a hypothesis. Use the saved range to distinguish six-month and full-history runs. Inspect the monthly and symbol-level evidence, lifecycle P&L distribution, exact parameters, diagnostics and recorded reviewer notes. Candidate rows link to [Backtest Explorer](BACKTEST_EXPLORER.md) and the replay action. Technical failures and rejected orders are separate from research verdicts.
+
+The evidence payload in the registry retains the frozen experiment specification, strategy and simulator identities, metrics, execution diagnostics, warnings, artifact links and batch runtime. The standard CLI and browser use the same persistent service and event stream.
 
 ## Verification
 

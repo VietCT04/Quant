@@ -53,11 +53,35 @@ class Settings:
         for name in _CONFIG_INTS:
             if not isinstance(getattr(self, name), int):
                 raise ValueError(f"{name} must be an integer")
-        if (not 0 < self.participation <= 1 or not 0 <= self.drawdown_limit <= 1 or
+        if (not 0 <= self.participation <= 1 or not 0 <= self.drawdown_limit <= 1 or
             not self.initial_wallet or self.leverage < 1 or not self.interval or
             not self.rebalance_ticks or not self.snapshot_ticks or self.logging not in (0, 1, 2) or self.fee_bps >= 10000 or
             self.spread_bps / 2 + self.slippage_bps + self.impact_bps >= 10000):
             raise ValueError("Invalid interval, leverage, participation, costs or drawdown settings")
+
+
+@dataclass(frozen=True)
+class OrderSettings(Settings):
+    """Versioned next-open research model. Legacy Settings preserves target execution."""
+    initial_wallet: float = 10_000
+    leverage: float = 1
+    participation: float = 0
+    max_gross_leverage: float = 0
+    max_symbol: float = 0
+    max_gross: float = 0
+    max_adjustment: float = 0
+    min_adjustment: float = 10
+    drawdown_limit: float = 0
+    lag: int = 0
+    latency: int = 0
+    rebalance_ticks: int = 1  # Compatibility field. Order scheduling belongs to the strategy.
+    max_positions: int = 0
+    quantity_step: float = 0.000001
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.lag or self.latency % self.interval or not 1e-10 <= self.quantity_step <= 1:
+            raise ValueError("Orders require the completed-bar clock, interval-aligned latency and a valid quantity step")
 
 
 class _Config(ct.Structure):
@@ -71,6 +95,8 @@ def dtype(ints, floats):
 SETTLEMENT = dtype("ms symbol", "rate price")
 ORDER = dtype("ms bar_start decision symbol reason",
               "target requested filled reference price fee slippage realized closed closed_net hold_ms after entry")
+ORDER_V2 = np.dtype(ORDER.descr + dtype("id kind", "requested_notional rounded buying_power intent_size").descr)
+REQUEST = dtype("due id symbol kind decision", "size")
 CASHFLOW = dtype("ms symbol", "qty mark rate payment")
 TARGET = dtype("ms symbol", "notional")
 EQUITY = dtype("ms uncertain_positions maintenance_breach",
@@ -128,6 +154,11 @@ def _library():
             lib.sim_run_shared.argtypes = [ptr, ptr, ptr, ptr, size, ptr, size, ptr]
             lib.sim_run_shared.restype = ct.c_int
             lib.sim_risk.argtypes, lib.sim_risk.restype = [ptr, ptr], None
+        if hasattr(lib, "sim_run_orders"):
+            lib.sim_orders_config.argtypes, lib.sim_orders_config.restype = [ptr, ct.c_double], None
+            lib.sim_run_orders.argtypes = [ptr, ptr, ptr, ptr, ptr, size, ptr, size, ptr, size]
+            lib.sim_run_orders.restype = ct.c_int
+            lib.sim_terminal.argtypes, lib.sim_terminal.restype = [ptr, ct.c_int64, ptr, size], ct.c_int
         for f in ("orders", "cashflows", "targets", "curve"):
             func = getattr(lib, "sim_" + f)
             func.argtypes, func.restype = [ptr, ct.POINTER(size)], ptr
@@ -157,6 +188,11 @@ class Engine:
         if not self.handle:
             raise MemoryError("Native simulator creation failed")
         self.last_time = None
+        if isinstance(settings, OrderSettings):
+            if not hasattr(self.lib, "sim_run_orders") or targets is not None:
+                self.close()
+                raise ValueError("Explicit orders require the V2 native library and no static targets")
+            self.lib.sim_orders_config(self.handle, settings.quantity_step)
 
     def close(self):
         if getattr(self, "handle", None):
@@ -215,6 +251,54 @@ class Engine:
             raise RuntimeError("Native simulator rejected the block")
         self.last_time = starts[-1]
 
+    def run_orders(self, starts, values, status, opens, settlements, requests):
+        if not isinstance(self.settings, OrderSettings) or not self.handle:
+            raise ValueError("An open order-mode engine is required")
+        starts = np.ascontiguousarray(starts, dtype="=i8")
+        values = np.ascontiguousarray(values, dtype="=f8")
+        status = np.ascontiguousarray(status, dtype="u1")
+        opens = np.ascontiguousarray(opens, dtype="=f8")
+        funding = np.ascontiguousarray(settlements, dtype=SETTLEMENT)
+        requests = np.ascontiguousarray(list(requests), dtype=REQUEST)
+        if (not len(starts) or values.shape != (len(starts), self.n, 4)
+                or status.shape != values.shape[:2] or opens.shape != status.shape):
+            raise ValueError("Mismatched order-mode input axes")
+        step = self.settings.interval
+        if (np.any(np.diff(starts) != step) or np.any(starts % step)
+                or self.last_time is not None and starts[0] != self.last_time + step):
+            raise ValueError("Orders require contiguous scheduled bars")
+        end = starts[-1] + step
+        if (funding.ndim != 1 or np.any(np.diff(funding["ms"]) < 0)
+                or np.any(funding["ms"] >= end)
+                or self.last_time is not None and np.any(funding["ms"] < starts[0])
+                or np.any((funding["symbol"] < 0) | (funding["symbol"] >= self.n))
+                or not np.isfinite(funding["rate"]).all() or not np.isfinite(funding["price"]).all()
+                or np.any(funding["price"] <= 0)):
+            raise ValueError("Invalid order-mode funding events")
+        due = requests["due"]
+        if (np.any(np.diff(due) < 0) or np.any((due < starts[0]) | (due >= end) | (due % step != 0))
+                or np.any(requests["decision"] + self.settings.latency != due)
+                or np.any((requests["symbol"] < 0) | (requests["symbol"] >= self.n))
+                or np.any((requests["kind"] < 0) | (requests["kind"] > 3))):
+            raise ValueError("Orders must be sorted and scheduled on a valid bar open")
+        rc = self.lib.sim_run_orders(self.handle, starts.ctypes.data, values.ctypes.data, status.ctypes.data,
+                                     opens.ctypes.data, len(starts), funding.ctypes.data, len(funding),
+                                     requests.ctypes.data, len(requests))
+        if rc:
+            self.close()
+            raise RuntimeError("Native simulator rejected the order block")
+        self.last_time = starts[-1]
+
+    def terminal(self, end, requests=()):
+        requests = np.ascontiguousarray(list(requests), dtype=REQUEST)
+        if (not self.handle or not isinstance(self.settings, OrderSettings) or self.last_time is None
+                or end != self.last_time + self.settings.interval
+                or np.any((requests["symbol"] < 0) | (requests["symbol"] >= self.n))):
+            raise ValueError("Invalid terminal order-mode call")
+        if self.lib.sim_terminal(self.handle, end, requests.ctypes.data, len(requests)):
+            self.close()
+            raise RuntimeError("Native simulator rejected the terminal event")
+
     def _batch(self, name, dtype_):
         if not self.handle:
             raise RuntimeError("Simulator is closed")
@@ -225,7 +309,12 @@ class Engine:
         return np.frombuffer(ct.string_at(ptr, size.value * dtype_.itemsize), dtype=dtype_)
 
     def orders(self):
-        return self._batch("orders", ORDER)
+        if isinstance(self.settings, OrderSettings):
+            return self._batch("orders", ORDER_V2)
+        if not hasattr(self.lib, "sim_run_orders"):
+            return self._batch("orders", ORDER)
+        result = self._batch("orders", ORDER_V2)
+        return result[list(ORDER.names)].astype(ORDER, copy=False)
 
     def cashflows(self):
         return self._batch("cashflows", CASHFLOW)

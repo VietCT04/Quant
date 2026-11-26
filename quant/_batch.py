@@ -1,6 +1,7 @@
 """Block-major research execution over the existing native portfolio engine."""
 
 from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
 from copy import copy
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
@@ -13,8 +14,8 @@ import shutil
 import numpy as np
 
 from marketdata.model import DAY, load_json, write_json
-from simulator.feed import order_rules
-from simulator.native import Engine
+from simulator.feed import MarketDataFeed, order_rules
+from simulator.native import Engine, OrderSettings
 from simulator.reporting import Logs, performance, record
 
 from . import features
@@ -22,7 +23,7 @@ from ._core import array
 from ._prepared import prepared
 from ._resources import hardware, worker_count
 from .data import UNITS, Block, Selection, fingerprint
-from .validation import HOLDOUT_START, _check
+from .validation import _check
 
 MODES = {"benchmark": 0, "summary": 2, "standard": 1, "audit": 1}
 FIELDS = {
@@ -45,6 +46,8 @@ class Candidate:
     fields: tuple = ()
     feedback: bool = False
     trace_width: int = 0
+    warmup_bars: int = 0
+    feature_periods: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -104,7 +107,7 @@ class _Trial:
         self.settings = replace(
             config,
             logging=MODES[mode],
-            snapshot_ticks=1 if mode == "audit" else config.snapshot_ticks,
+            snapshot_ticks=1 if mode == "audit" and not isinstance(config, OrderSettings) else config.snapshot_ticks,
         )
         if (
             candidate.allocation is not None
@@ -119,10 +122,16 @@ class _Trial:
         self.logs = (
             Logs(self.directory, feed.symbols) if self.settings.logging == 1 else None
         )
+        self.ordered = None
+        if isinstance(config, OrderSettings):
+            from ._order_trial import OrderTrial
+            self.ordered = OrderTrial(self, feed)
 
-    def advance(self, starts, market, status, funding, block, at_boundary):
+    def advance(self, starts, market, status, funding, block):
+        if self.ordered is not None:
+            return self.ordered.advance(starts, market, status, funding, block)
         if self.candidate.feedback:
-            return self._advance_feedback(starts, market, status, funding, block, at_boundary)
+            return self._advance_feedback(starts, market, status, funding, block)
         decision = self.candidate.decision
         clock = perf_counter()
         target = None
@@ -131,8 +140,6 @@ class _Trial:
             if value.shape != status.shape or np.isinf(value).any():
                 raise ValueError("Callbacks must return signed USDT on the block axes")
             target = np.where(status <= 1, value, np.nan)
-            if at_boundary:
-                target[block.available_at_ms >= HOLDOUT_START] = np.nan
         signal_seconds = perf_counter() - clock
         clock = perf_counter()
         self.engine.run_shared(starts, market, status, funding, targets=target)
@@ -158,7 +165,7 @@ class _Trial:
         for ms, equity in zip(curve["ms"], curve["equity"]):
             self.daily[int((ms - self.settings.lag - 1) // DAY)] = float(equity)
 
-    def _advance_feedback(self, starts, market, status, funding, block, at_boundary):
+    def _advance_feedback(self, starts, market, status, funding, block):
         from .strategy import Portfolio
 
         decision = self.candidate.decision
@@ -185,8 +192,6 @@ class _Trial:
             logging_seconds += perf_counter() - clock
 
         for row in decision.feedback_rows(block):
-            if at_boundary and block.available_at_ms[row] >= HOLDOUT_START:
-                break
             if row > previous:
                 run(row)
             clock = perf_counter()
@@ -208,9 +213,12 @@ class _Trial:
     def finish(self, feed, *, archive=None):
         from .simulator import Result
 
+        order_report = self.ordered.finish() if self.ordered is not None else None
         end = record(self.engine.equity())
         risk = record(self.engine.risk())
         position = self.engine.positions()
+        if order_report is not None:
+            self.logs = None
         if self.logs is not None:
             self.logs.append("positions", position)
             self.logs.close(True)
@@ -231,13 +239,16 @@ class _Trial:
                 end,
                 position,
                 feed,
-                daily=self.daily if self.mode == "summary" else None,
+                daily=self.daily if self.mode == "summary" or order_report is not None else None,
             )
             report |= {
                 "risk": risk,
                 "settings": asdict(self.settings),
                 "mode": self.mode,
+                "execution_model": "legacy_targets_v1",
             }
+            if order_report is not None:
+                report |= order_report | {"roi": report["total_return"]}
         destination = archive
         if destination is None:
             self.directory.mkdir(parents=True, exist_ok=True)
@@ -247,7 +258,9 @@ class _Trial:
 
     def close(self):
         try:
-            if self.logs is not None:
+            if self.ordered is not None:
+                self.ordered.close()
+            elif self.logs is not None:
                 self.logs.close(False)
         finally:
             self.engine.close()
@@ -287,8 +300,6 @@ def run_batch(
     if not isinstance(data, Selection):
         raise TypeError("Batch execution requires an SDK market Selection")
     _check(data.start, data.end)
-    if data.end > HOLDOUT_START:
-        raise PermissionError("Batch simulations must finish in development")
     candidates = list(strategies)
     _validate(candidates)
     if (
@@ -375,8 +386,19 @@ def run_batch(
     )
     begin = perf_counter()
     pointer = 0
-    template = _feed(data, block_steps)
-    rules = order_rules(template.dataset, template.symbols)
+    models = {(isinstance(c.config, OrderSettings), c.warmup_bars) for c in candidates}
+    if len(models) != 1:
+        raise ValueError("Batch only matching execution models and pre-warm-up requirements")
+    ordered, warmup = models.pop()
+    if ordered:
+        from .validation import warmup_start
+        warm_start = warmup_start(data.start, warmup, data.dataset.interval_ms)
+        template = MarketDataFeed(data.dataset, data.symbols, warm_start, data.end, block_steps=block_steps,
+                                  completed_clock=True, trading_start=data.start)
+        rules = np.zeros((len(data.symbols), 2))
+    else:
+        template = _feed(data, block_steps)
+        rules = order_rules(template.dataset, template.symbols)
     data_identity = fingerprint(data) if resume_token is not None else None
     with ThreadPoolExecutor(max_workers=worker_limit) as pool:
         while pointer < len(candidates):
@@ -394,7 +416,7 @@ def run_batch(
                     }
                 )
                 live = min(worker_limit, len(wave))
-                extra_fields = tuple(sorted({name for c in wave for name in c.fields} - FIELDS.keys()))
+                extra_fields = tuple(sorted(({name for c in wave for name in c.fields} - FIELDS.keys()) | ({"open", "quote_volume"} if ordered else set())))
                 trace_bytes = 8 * max((c.trace_width for c in wave), default=0) if logging == "audit" else 0
                 per_cell = (
                     128 + 24 * len(extra_fields) + 32 * len(graph)
@@ -465,6 +487,7 @@ def run_batch(
                     continue
             trials = {}
             expressions = {}
+            sampled = defaultdict(dict)
             keys = {}
             feature_errors = {}
 
@@ -475,9 +498,12 @@ def run_batch(
                 try:
                     trials[c.name] = _Trial(c, feed, rules, out, logging)
                     keys[c.name] = dict(c.expressions)
-                    for node in c.expressions.values():
-                        if node not in expressions:
-                            expressions[node] = f"feature_{len(expressions)}"
+                    for name, node in c.expressions.items():
+                        period = c.feature_periods.get(name, 1)
+                        key = (node, period)
+                        if key not in expressions:
+                            alias = expressions[key] = f"feature_{len(expressions)}"
+                            sampled[period][alias] = node
                 except Exception as error:
                     failures[c.name] = f"{type(error).__name__}: {error}"
             profile["feature_nodes"] += len(graph)
@@ -548,16 +574,23 @@ def run_batch(
                             clock = perf_counter()
 
                     blocks = static_inputs()
-                elif expressions:
+                elif 1 in sampled:
                     blocks = features.evaluate(
                         projected(),
-                        {alias: node for node, alias in expressions.items()},
+                        sampled[1],
                         memory_bytes=max(1, memory_cap - persistent),
                         on_error=feature_failed,
                     )
                 else:
                     blocks = projected()
+                from ._timeframes import CompletedFeatures
+                if sampled:
+                    biggest = max(sampled)
+                    if biggest * n * (128 + 24 * len(extra_fields)) > memory_cap - persistent:
+                        raise MemoryError("Higher timeframe aggregation exceeds the configured memory budget")
+                aligned_features = CompletedFeatures(sampled, feed.step, max(1, memory_cap - persistent), feature_failed)
                 for feature_block in blocks:
+                    higher = aligned_features.advance(base) if aligned_features.groups else {}
                     for name in tuple(trials):
                         blocked = next(
                             (
@@ -577,7 +610,7 @@ def run_batch(
                     profile["market_blocks"] += 1
                     profile["scheduled_cells"] += status.size
                     profile["observed_bars"] += int(np.count_nonzero(status <= 1))
-                    funding = feed.funding_through(starts[-1] + feed.step + feed.lag)
+                    funding = feed.funding_through(starts[-1] + feed.step + feed.lag - int(ordered))
 
                     def advance(item):
                         name, trial = item
@@ -587,9 +620,8 @@ def run_batch(
                                 values = dict(base.values)
                                 units = dict(base.units)
                                 for alias, node in keys[name].items():
-                                    values[alias] = feature_block.values[
-                                        expressions[node]
-                                    ]
+                                    period = trial.candidate.feature_periods.get(alias, 1)
+                                    values[alias] = (feature_block.values if period == 1 else higher)[expressions[node, period]]
                                     units[alias] = node.units
                                 block = _DecisionFrame(base, values, units)
                             timing = trial.advance(
@@ -598,7 +630,6 @@ def run_batch(
                                 status,
                                 funding,
                                 block,
-                                feed.end == HOLDOUT_START,
                             )
                             return name, timing, None
                         except Exception as error:

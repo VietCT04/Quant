@@ -17,7 +17,7 @@ const positionCols: [string, string][] = [
 ]
 const orderCols: [string, string][] = [
   ['ms', 'Booked UTC'], ['symbol_name', 'Symbol'], ['type', 'Execution type'], ['side', 'Side'], ['requested', 'Requested qty'],
-  ['filled', 'Filled qty'], ['price', 'Fill price'], ['reference', 'Reference'], ['fee', 'Fees'],
+  ['rounded', 'Rounded qty'], ['filled', 'Filled qty'], ['price', 'Fill price'], ['reference', 'Reference'], ['fee', 'Fees'],
   ['slippage', 'Slippage'], ['realized', 'Realized P&L'], ['after', 'Position after'], ['reason_label', 'Outcome'],
 ]
 const eventCols: Record<Exclude<LedgerTab, 'positions'>, [string, string][]> = {
@@ -45,6 +45,8 @@ export function ExecutionCard({ event, symbol, clear }: { event: Execution; symb
     ['Booked fill / settlement UTC', utc(event.ms)], ['Decision UTC', utc(event.decision)],
     ['Decision input bar start UTC', utc(event.signal_bar_start)],
     ['Execution interval start UTC', utc(event.bar_start)], ['Execution interval end UTC', utc(event.execution_end)],
+    ['Order ID', event.order_id], ['Requested notional ? USDT', event.requested_notional],
+    ['Rounded quantity', event.rounded], ['Available buying power ? USDT', event.buying_power],
     ['Reference price', event.reference], ['Modeled fill price', event.price], ['Requested quantity', event.requested],
     ['Filled quantity', event.filled], ['Filled notional · USDT', event.filled_notional], ['Fees · USDT', event.fee],
     ['Spread / slippage / impact · USDT', event.slippage], ['Resulting signed quantity', event.after],
@@ -68,7 +70,7 @@ export function PositionCard({ position, base, symbol, pick, clear, fit }: {
   const [offset, setOffset] = useState(0)
   const resource = useResource<Page<Execution>>(`${base}/positions?${params({ symbol, position: position.id, offset, limit: 25 })}`)
   return <section className="panel selection-card" aria-label="Position detail"><header className="panel-heading">
-    <div><h2>{position.id} <Badge value={position.state} /></h2><p>{position.side} · {utc(position.entry_ms)} UTC → {position.exit_ms ? utc(position.exit_ms) + ' UTC' : 'Open at run end'}</p></div>
+    <div><h2>{position.id} <Badge value={position.state} /></h2><p>{position.terminal_close ? 'Virtual terminal exit / ' : ''}{position.side} · {utc(position.entry_ms)} UTC → {position.exit_ms ? utc(position.exit_ms) + ' UTC' : 'Open at run end'}</p></div>
     <div className="ledger-actions"><button onClick={fit}>Fit position</button><button onClick={clear}>Clear position</button></div></header>
     <dl className="execution-fields">{positionCols.filter(([field]) => ['net_pnl', 'gross_realized', 'fees', 'slippage', 'funding', 'unrealized', 'max_notional', 'mfe', 'mae', 'coverage'].includes(field))
       .map(([field, title]) => <div key={field}><dt>{title}</dt><dd>{label(position, field)}</dd></div>)}</dl>

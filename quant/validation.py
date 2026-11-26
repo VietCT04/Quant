@@ -10,16 +10,25 @@ import numpy as np
 from marketdata.reader import as_millis
 from ._core import array, duration
 
+RESEARCH_START = as_millis("2024-11-25")
+RESEARCH_END = as_millis("2026-11-25")
+SCREEN_START = as_millis("2026-05-25")
+
+# Historical constants retained for archived final-release receipts.
 HOLDOUT_START = as_millis("2026-08-25")
 HOLDOUT_END = as_millis("2026-11-25")
+
+
+def warmup_start(start, bars, step):
+    """Clip historical pre-warmup to the first audited day, keeping fixture dates usable."""
+    floor = RESEARCH_START if start >= RESEARCH_START else 0
+    return max(floor, start - bars * step)
 
 
 def _check(start, end, *, infrastructure=False):
     start, end = as_millis(start), as_millis(end)
     if end <= start:
         raise ValueError("Expected an increasing UTC range")
-    if start < HOLDOUT_END and end > HOLDOUT_START and not infrastructure:
-        raise PermissionError("The reserved strategy evaluation period is protected")
     return start, end
 
 

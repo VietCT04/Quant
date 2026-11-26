@@ -131,18 +131,12 @@ def test_seeded_signals_and_native_result_invariant_to_block_size():
                 assert fills == expected
 
 
-def test_precomputed_timestamps_and_holdout_guard(tmp_path):
-    from simulator.__main__ import backtest
-    from marketdata.reader import as_millis
-    from types import SimpleNamespace
-
+def test_precomputed_timestamps(tmp_path):
     starts, values, _ = tape([10, 10, 10], [np.nan, np.nan, np.nan])
     Precomputed([0, 10000], [[20], [-20]]).apply_at(starts, values)
     assert values[[0, 2], 0, 4].tolist() == [20, -20]
     with pytest.raises(ValueError, match="align"):
         Precomputed([5], [[20]]).apply_at(starts, values)
-    with pytest.raises(ValueError, match="2026-08-25"):
-        backtest(SimpleNamespace(end=as_millis("2026-08-26")), settings(), None, tmp_path)
 
 
 def test_drawdown_flatten_is_a_new_causal_decision():

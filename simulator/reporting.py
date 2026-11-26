@@ -63,7 +63,7 @@ def performance(folder, settings, final, positions, feed, *, daily=None):
     returns = np.divide(endpoint[1:], endpoint[:-1],
                         out=np.full(len(endpoint)-1, np.nan), where=endpoint[:-1] > 0) - 1
     complete = returns[np.isfinite(returns)]
-    factors = max((feed.end - feed.start) / DAY, 1 / 86400)
+    factors = max((feed.end - getattr(feed, "trading_start", feed.start)) / DAY, 1 / 86400)
     equity = final["equity"]
     ann = (equity / wallet) ** (365 / factors) - 1 if equity > 0 and factors >= 1 else None
     ret = equity / wallet - 1
@@ -95,7 +95,7 @@ def performance(folder, settings, final, positions, feed, *, daily=None):
             "open_pnl": sum(x["unrealized"] for x in states if x["qty"] * direction > 0),
         }
     return {
-        "bar_range_ms": [feed.start, feed.end], "symbols": list(feed.symbols),
+        "bar_range_ms": [getattr(feed, "trading_start", feed.start), feed.end], "symbols": list(feed.symbols),
         "sampling": "last UTC daily snapshot, initial wallet as the first denominator, 365 days/year",
         "sampling_count": len(complete), "end": final,
         "daily_marked_equity": [[day * DAY, amount] for day, amount in days.iter_rows()],
@@ -133,3 +133,34 @@ def closed_reductions(folder):
         "top5_winner_share": closed["top5"] / closed["wins_sum"] if closed["wins_sum"] > 0 else None,
         "net_without_top5": closed["net_closed"] - closed["top5"],
     }
+
+
+def order_lifecycles(folder, symbols, positions, end):
+    """Summarize completed lifecycles using the same ledger grouping as Explorer."""
+    from quant.explorer_ledger import reconstruct
+
+    net, duration, returns = [], [], []
+    details = {}
+    for i, symbol in enumerate(symbols):
+        queries = (pl.scan_parquet(folder / f"{table}.parquet").filter(pl.col("symbol") == i)
+                   for table in ("fills", "funding"))
+        fills, flows = (query.collect(engine="streaming").iter_rows(named=True) for query in queries)
+        entries, _, _ = reconstruct(symbol, fills, flows, record(positions[i]), end, detail=False)
+        closed = [row for row in entries if row["state"] == "closed"]
+        net.extend(row["net_pnl"] for row in closed)
+        duration.extend(row["duration_ms"] for row in closed)
+        returns.extend(row["return_on_opening_notional"] for row in closed)
+        details[symbol] = {"completed_positions": len(closed), "net_closed": sum(row["net_pnl"] for row in closed)}
+    pnl = np.asarray(net)
+    wins, losses = pnl[pnl > 0], pnl[pnl < 0]
+    counts, edges = np.histogram(pnl, bins=20) if len(pnl) else ([], [])
+    return {"count": len(pnl), "wins": len(wins), "losses": len(losses),
+            "profit_factor": float(wins.sum() / -losses.sum()) if len(losses) else None,
+            "win_rate": len(wins) / len(pnl) if len(pnl) else None,
+            "average_win": float(wins.mean()) if len(wins) else None,
+            "average_loss": float(losses.mean()) if len(losses) else None,
+            "expectancy": float(pnl.mean()) if len(pnl) else None,
+            "holding_ms": dict(zip(("p10", "median", "p90"), np.percentile(duration, (10, 50, 90)).tolist())) if duration else {},
+            "return_quantiles": dict(zip(("p10", "median", "p90"), np.percentile(returns, (10, 50, 90)).tolist())) if returns else {},
+            "net_distribution": {"edges": list(edges), "counts": [int(x) for x in counts]},
+            "per_symbol": details}

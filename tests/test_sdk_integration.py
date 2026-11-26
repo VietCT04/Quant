@@ -177,8 +177,8 @@ def test_target_stream_and_boundary(tmp_path, monkeypatch):
         end=q.validation.HOLDOUT_END,
         infrastructure=True,
     )
-    with pytest.raises(PermissionError):
-        sim.run(reserved, targets, out=tmp_path / "forbidden")
+    with pytest.raises(ValueError, match="axes"):
+        sim.run(reserved, targets, out=tmp_path / "misaligned")
 
 
 def test_release_receipt_and_sealed_native_entry(tmp_path, monkeypatch):
@@ -264,7 +264,7 @@ def test_robustness_validation():
         v.deflated_sharpe(np.ones(9), trial_sharpes=[0, 1], independent_trials=2)
 
 
-def test_forward_labels_at_development_end_are_purged():
+def test_forward_labels_at_historical_policy_boundary():
     hi = q.validation.HOLDOUT_START
     clock = np.arange(hi - 20000, hi, 5000, dtype="i8")
     values = np.array([[1.0], [2.0], [3.0], [4.0]])
@@ -279,7 +279,7 @@ def test_forward_labels_at_development_end_are_purged():
     )
     labels = q.evaluate.forward_returns(source_block, 1)
     assert_allclose(
-        q.evaluate.research_values(labels).ravel(), [1, 0.5, np.nan, np.nan]
+        q.evaluate.research_values(labels).ravel(), [1, 0.5, 1/3, np.nan]
     )
     aligned = replace(source_block, available_at_ms=clock + 5101)
     assert np.isnan(q.evaluate.per_symbol_ic(aligned, labels)).all()

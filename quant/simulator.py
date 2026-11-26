@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 
 from simulator.__main__ import _backtest, backtest
 from simulator.feed import MarketDataFeed
-from simulator.native import Settings
+from simulator.native import OrderSettings, Settings
 from simulator.strategies import Precomputed
 
 from ._core import array
@@ -152,8 +152,6 @@ def _validated(targets, feed):
         raise ValueError(
             "Targets must use the feed axes and be available by the corresponding decision"
         )
-    if feed.end in (HOLDOUT_START, HOLDOUT_END):
-        value = np.where(clock[:, None] < feed.end, value, np.nan)
     return Precomputed(starts, value)
 
 

@@ -9,7 +9,7 @@ export type Series = { portfolio: Points; symbol: Points; symbol_error?: string 
 export type Feature = { name: string; function: string; label: string; parameters: Record<string, unknown>; units: string; pane: 'price' | 'signal'; color: string; provenance: Record<string, unknown> }
 export type Features = { features: Feature[]; series: Points }
 export type Replay = { hypothesis_id: string; job: string; status: string; failure: { message?: string; type?: string } | null }
-export type Meta = Window & { strategy?: { id: string; version: string } | null; job: string; hypothesis_id: string; symbols: string[]; detailed_job: string | null; replay: Replay | null; compatibility: string | null; funding_warnings: unknown[] }
+export type Meta = Window & { execution_model?: string; strategy?: { id: string; version: string } | null; job: string; hypothesis_id: string; symbols: string[]; detailed_job: string | null; replay: Replay | null; compatibility: string | null; funding_warnings: unknown[] }
 export type Row = Record<string, string | number | boolean | null | undefined>
 export type Execution = Row & { ms: number; id?: string; type?: string; side?: string; partial?: boolean; price?: number | null; reference?: number | null; mark?: number | null; symbol_name?: string }
 export type Position = Row & { id: string; symbol: string; side: string; state: string; entry_ms: number; exit_ms: number | null; duration_ms: number; net_pnl: number; sampled_ticks: number; held_ticks: number }
@@ -40,5 +40,5 @@ export function timeframe(range: Window): Timeframe {
 
 export const executionLabel: Record<string, string> = {
   long_entry: 'Long entry', short_entry: 'Short entry', long_exit: 'Long exit', short_exit: 'Short exit',
-  scale_in: 'Scale-in', scale_out: 'Scale-out', reversal: 'Reversal', rejected: 'Rejected', funding: 'Funding',
+  terminal_close: 'End of backtest (virtual)', scale_in: 'Scale-in', scale_out: 'Scale-out', reversal: 'Reversal', rejected: 'Rejected', funding: 'Funding',
 }

@@ -16,9 +16,8 @@ import numpy as np
 from simulator.reporting import Logs
 
 from . import data, features, registry
-from .validation import HOLDOUT_START
 
-API_VERSION = 1
+API_VERSION = 2
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _KINDS = {"integer": int, "number": (float, int), "boolean": bool,
           "string": str, "array": list, "object": dict}
@@ -70,6 +69,8 @@ class Plan:
     warmup_bars: int = 0
     decision_ticks: int | None = None
     plots: tuple[Plot, ...] = ()
+    # Higher-frame expression nodes identify their sampling period in base bars.
+    feature_periods: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,11 @@ class Portfolio:
     clock_ms: int | None
     positions: np.ndarray
     equity: float
+    balance: float | None = None
+    available_margin: float | None = None
+    outcomes: tuple = ()
+    leverage: float = 1
+    ready: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,8 @@ class Strategy:
     decide: Callable | None = None
     capabilities: tuple[str, ...] = ()
     sources: tuple[Path, ...] = ()
+    orders: Callable | None = None
+    warm: Callable | None = None
 
 
 def _source_hash(paths):
@@ -121,7 +129,8 @@ def _hash_sources(paths, revision):
 
 _RUNTIME_MODULES = (
     "quant/_batch.py", "quant/_core.py", "quant/_prepared.py", "quant/_screen.py",
-    "quant/control_handlers.py", "quant/strategy.py", "quant/evaluate.py", "quant/features.py",
+    "quant/control_handlers.py", "quant/strategy.py", "quant/trading.py",
+    "quant/_order_trial.py", "quant/_timeframes.py", "quant/explorer_ledger.py", "quant/evaluate.py", "quant/features.py",
     "quant/data.py", "quant/registry.py", "quant/validation.py", "quant/simulator.py",
     "quant/cs.py", "quant/math.py", "quant/ts.py", "quant/indicators.py", "quant/stats.py",
     "quant/volatility.py", "quant/microstructure.py", "quant/portfolio.py", "quant/risk.py",
@@ -143,12 +152,12 @@ def _bindings():
         if (
             not _NAME.fullmatch(strategy.id)
             or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", strategy.version)
-            or key in result or (strategy.targets is None) == (strategy.decide is None)
+            or key in result or sum(c is not None for c in (strategy.targets, strategy.decide, strategy.orders)) != 1
             or not strategy.fields or set(strategy.fields) - (data.UNITS.keys() | {"mark", "execution"})
             or any(not _NAME.fullmatch(name) or rule.kind not in _KINDS for name, rule in strategy.parameters.items())
         ):
             raise ValueError(f"Invalid or duplicate trusted strategy binding: {key}")
-        callables = (strategy.prepare, strategy.initialize, strategy.signal, strategy.targets, strategy.decide)
+        callables = (strategy.prepare, strategy.initialize, strategy.signal, strategy.targets, strategy.decide, strategy.orders, strategy.warm)
         paths = tuple(Path(inspect.getsourcefile(fn)).resolve() for fn in callables if fn is not None)
         paths += tuple(Path(path).resolve() for path in strategy.sources)
         result[key] = strategy, paths, _source_hash(paths)
@@ -162,8 +171,17 @@ def available():
         "implementation_hash": digest,
         "parameters": {k: asdict(rule) | {"required": rule.default is None} for k, rule in item.parameters.items()},
         "fields": item.fields, "capabilities": item.capabilities, "screen": item.signal is not None,
-        "portfolio_feedback": item.decide is not None,
+        "portfolio_feedback": item.decide is not None or item.orders is not None,
+        "execution_model": "next_open_v2" if item.orders is not None else "legacy_targets_v1",
     } for item, _, digest in _bindings().values()]
+
+
+def is_order_strategy(reference):
+    if isinstance(reference, dict):
+        key = reference.get("id"), reference.get("version")
+        binding = _bindings().get(key) if all(isinstance(v, str) for v in key) else None
+        return binding is not None and binding[0].orders is not None
+    return False
 
 
 def _node(node):
@@ -202,8 +220,9 @@ def prepare(reference, parameters, *, rebalance_ticks, screen=False):
     plan = strategy.prepare(MappingProxyType(parameters))
     if not isinstance(plan, Plan) or type(plan.warmup_bars) is not int or plan.warmup_bars < 0:
         raise ValueError("Strategy must supply a Plan with nonnegative warm-up")
-    cadence = plan.decision_ticks if plan.decision_ticks is not None else rebalance_ticks
-    if type(cadence) is not int or cadence < 1 or rebalance_ticks % cadence:
+    ordered = strategy.orders is not None
+    cadence = plan.decision_ticks if plan.decision_ticks is not None else (1 if ordered else rebalance_ticks)
+    if type(cadence) is not int or cadence < 1 or not ordered and rebalance_ticks % cadence:
         raise ValueError("Decision cadence must divide the native rebalance interval")
     if screen and (strategy.signal is None or set(strategy.fields) - data.UNITS.keys()):
         raise ValueError("This strategy has no screening signal or needs native-only market inputs")
@@ -216,7 +235,7 @@ def prepare(reference, parameters, *, rebalance_ticks, screen=False):
         raise ValueError("Strategy visualization descriptors must be Plot values")
     supplied = {plot.name for plot in plan.plots}
     extras = [Plot(name, name, node.units) for name, node in plan.features.items() if name not in supplied]
-    if "target" not in supplied:
+    if not ordered and "target" not in supplied:
         extras.append(Plot("target", "Requested target", "USDT"))
     plan = replace(plan, plots=(*plan.plots, *extras))
     names = [plot.name for plot in plan.plots]
@@ -231,13 +250,23 @@ def prepare(reference, parameters, *, rebalance_ticks, screen=False):
         raise ValueError("At most 32 strategy series may be recorded")
     requirements = sorted(set(strategy.capabilities) | {node.name for node in graph})
     receipt = {
-        **reference, "api_version": API_VERSION, "implementation_hash": digest, "runtime_hash": _LOADED_RUNTIME,
+        **reference, "api_version": API_VERSION if ordered else 1, "implementation_hash": digest, "runtime_hash": _LOADED_RUNTIME,
         "fields": list(strategy.fields), "warmup_bars": plan.warmup_bars, "decision_ticks": cadence,
-        "feedback": strategy.decide is not None, "dependency_versions": _DEPENDENCIES,
+        "feedback": strategy.decide is not None or ordered, "dependency_versions": _DEPENDENCIES,
         "capabilities": requirements, "graph": {name: _node(node) for name, node in plan.features.items()},
         "kernel_versions": {node.name: registry.describe(node.name)["version"] for node in graph},
         "plots": [{"display": "line", **asdict(plot)} for plot in plan.plots],
     }
+    if ordered:
+        receipt["execution_model"] = "next_open_v2"
+    if plan.feature_periods:
+        if not ordered or screen or set(plan.feature_periods) - plan.features.keys() or any(
+            set(_inputs(plan.features[name])) & {"mark", "execution"} for name in plan.feature_periods
+            ) or any(
+            type(period) is not int or period < 2 for period in plan.feature_periods.values()
+        ):
+            raise ValueError("Higher timeframe periods must name graph outputs and be at least two base bars")
+        receipt["feature_periods"] = plan.feature_periods
     return strategy, plan, parameters, json.loads(json.dumps(receipt, allow_nan=False))
 
 
@@ -245,7 +274,7 @@ def resolve_frozen(spec, settings, *, screen=False):
     frozen = spec["strategy"]
     resolved = prepare({key: frozen[key] for key in ("id", "version")}, spec["parameters"],
                        rebalance_ticks=settings.rebalance_ticks, screen=screen)
-    if resolved[3] != frozen:
+    if resolved[3] != {key: value for key, value in frozen.items() if key != "warmup_fingerprint"}:
         raise ValueError("Incompatible frozen strategy version, code, or feature graph")
     return resolved
 
@@ -268,9 +297,9 @@ class Runner:
         self.state = strategy.initialize(MappingProxyType(params), tuple(symbols), np.random.default_rng(seed))
         self.offset = 0
         self.trace = trace
-        self.holdout_boundary = end == HOLDOUT_START
         self.annotations = {}
         self._targets = None
+        self.last_valid_run = np.zeros(len(symbols), dtype=np.int64)
 
     def _view(self, block):
         names = (*self.fields, *self.plan.features)
@@ -297,8 +326,6 @@ class Runner:
         target, annotations = self._decision(self.strategy.targets(self.state, view), view.status.shape)
         ticks = np.arange(len(target)) + self.offset
         enabled = (ticks >= self.plan.warmup_bars) & (ticks % self.receipt["decision_ticks"] == 0)
-        if self.holdout_boundary:
-            enabled &= view.available_at_ms < HOLDOUT_START
         target = np.where(enabled[:, None] & (view.status <= 1), target, np.nan)
         self.offset += len(target)
         self._log(view, target, annotations)
@@ -323,6 +350,26 @@ class Runner:
                     self.annotations[name] = np.full_like(self._targets, np.nan)
                 self.annotations[name][row] = array[0]
         return self._targets[row:row + 1]
+
+    def warm_orders(self, block, count):
+        if self.strategy.warm is not None and count:
+            self.strategy.warm(self.state, data._slice(self._view(block), 0, count))
+
+    def order_step(self, block, row, portfolio):
+        from .trading import Orders
+
+        view = self._view_row(block, row)
+        intents = Orders(view.symbols)
+        series = self.strategy.orders(self.state, view, portfolio, intents)
+        if series is not None:
+            if set(series) - set(self.names) or set(series) & self.plan.features.keys():
+                raise ValueError("Order observations must use declared non-feature plot names")
+            if self.trace is not None:
+                for name, values in series.items():
+                    if name not in self.annotations:
+                        self.annotations[name] = np.full(block.status.shape, np.nan)
+                    self.annotations[name][row] = _array(name, values, view.status.shape)[0]
+        return intents.items
 
     def _view_row(self, block, row):
         sl = slice(row, row + 1)

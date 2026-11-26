@@ -43,6 +43,7 @@ rolling_regression rolling_beta rolling_residual sma wma linear_decay breakout""
 _FINITE_NAMES.remove("rolling_regression")
 _RECURSIVE = {"ema", "ewma", "exponential_decay", "wilder"}
 _TYPES = {
+    "trading": ("Orders", "Orders.buy", "Orders.sell", "Orders.close", "Orders.reduce", "Orders.close_all", "Orders.rebalance"),
     "ts": ("EMAState", "EMAState.update", "WilderState", "WilderState.update"),
     "data": ("Selection", "Block"),
     "evaluate": ("Labels", "ScreenCandidate"),
@@ -53,6 +54,7 @@ _TYPES = {
         "Result.iter_batches",
         "Candidate",
         "BatchResult",
+        "OrderSettings",
     ),
     "features": ("Cache", "Cache.get", "Cache.put", "Feature"),
     "stats": ("Regression",),

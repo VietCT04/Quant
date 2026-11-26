@@ -11,10 +11,10 @@ type Props = {
 const time = (ms: number): UTCTimestamp => (ms / 1000) as UTCTimestamp
 const executionColors: Record<string, string> = {
   long_entry: '#78e2b5', long_exit: '#8bb7e8', short_entry: '#f18d9d', short_exit: '#ebb774',
-  reversal: '#c3a2f8', scale_in: '#89d2d7', scale_out: '#9aaafe', rejected: '#e9b77b', funding: '#84cfe8',
+  terminal_close: '#b9a6f2', reversal: '#c3a2f8', scale_in: '#89d2d7', scale_out: '#9aaafe', rejected: '#e9b77b', funding: '#84cfe8',
 }
 const markText: Record<string, string> = {
-  long_entry: 'L+', long_exit: 'L−', short_entry: 'S+', short_exit: 'S−', reversal: 'REV',
+  terminal_close: 'END', long_entry: 'L+', long_exit: 'L−', short_entry: 'S+', short_exit: 'S−', reversal: 'REV',
   scale_in: '+', scale_out: '−', rejected: '×', funding: 'F',
 }
 const windowOf = (range: { from: Time; to: Time }): Window | null => typeof range.from === 'number' && typeof range.to === 'number'
@@ -116,7 +116,7 @@ export function MarketChart(props: Props) {
         if (typeof value !== 'number' || !Number.isFinite(value)) continue
         const clock = candles.rows[0]?.t ?? candles.start
         if (row.ms < clock || row.ms > candles.end + 1000) continue
-        const active = selected?.ms === row.ms && selected?.type === row.type
+        const active = selected?.id != null ? selected.id === row.id : selected?.ms === row.ms && selected?.type === row.type
         const inside = position && (row.type == 'funding' || row.filled) && row.ms >= position.entry_ms && row.ms <= (position.exit_ms ?? candles.end + 1000)
         const kind = row.type ?? 'funding'
         data.set(row.ms, value)

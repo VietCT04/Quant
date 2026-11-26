@@ -1,7 +1,8 @@
 """Artifact-backed data contracts for the local Backtest Explorer."""
 
 from dataclasses import asdict
-from functools import cached_property, lru_cache
+from functools import cached_property, lru_cache, partial
+import ast
 import csv
 import hashlib
 from io import StringIO
@@ -63,19 +64,31 @@ def verify_provenance(record, *, features_only=False):
         _mismatch("The original trusted handler version is unavailable.")
     root = Path(__file__).resolve().parents[1]
     core = root / "simulator" / "core.cpp"
-    if spec.get("sdk_version") != __version__ or spec.get("simulator_version") != hashlib.sha256(core.read_bytes()).hexdigest():
+    if spec.get("sdk_version") != __version__ or (
+        not features_only and spec.get("simulator_version") != hashlib.sha256(core.read_bytes()).hexdigest()
+    ):
         _mismatch("The recorded SDK or simulator version differs.")
+    command = ["git", "-C", str(root), "-c", f"safe.directory={root.as_posix()}"]
     scopes = ["quant", "simulator", "marketdata", "uv.lock",
               ":(exclude)quant/control_service.py", ":(exclude)quant/control_store.py",
               ":(exclude)quant/control_cli.py", ":(exclude,glob)quant/explorer*.py"]
     if features_only:
-        # Legacy display projects close, then evaluates only the archived SDK graph.
-        # Batch scheduling and extended columns are outside this calculation.
-        scopes.extend([":(exclude)quant/_batch.py", ":(exclude)quant/_screen.py",
-                       ":(exclude)quant/control_handlers.py", ":(exclude)quant/research.py",
-                       ":(exclude)quant/strategy.py", ":(exclude)quant/__init__.py",
-                       ":(exclude)simulator/feed.py"])
-    command = ["git", "-C", str(root), "-c", f"safe.directory={root.as_posix()}"]
+        # Legacy feature overlays need the original graph and causal kernels, not a compatible execution ABI.
+        scopes = ["marketdata", "quant/_core.py", "quant/data.py", "quant/features.py", "quant/math.py",
+                  "quant/ts.py", "quant/indicators.py", "quant/cs.py", "quant/volatility.py",
+                  "quant/microstructure.py", "quant/portfolio.py", "quant/signal.py", "uv.lock"]
+        try:
+            path = "quant/control_handlers.py"
+            prior = subprocess.check_output([*command, "show", f"{commit}:{path}"]).decode("utf-8")
+            current = (root / path).read_text(encoding="utf-8")
+            names = {"_expressions", "_score"}
+            def graph_logic(source):
+                return [ast.dump(node) for node in ast.parse(source).body
+                        if isinstance(node, ast.FunctionDef) and node.name in names]
+            if graph_logic(prior) != graph_logic(current):
+                _mismatch("The archived feature graph resolver has changed.")
+        except (OSError, subprocess.CalledProcessError, SyntaxError) as error:
+            _mismatch(f"The archived feature resolver could not be verified ({type(error).__name__}).")
     try:
         delta = subprocess.check_output([*command, "diff", "--name-only", commit, "--", *scopes], stderr=subprocess.STDOUT)
         untracked = subprocess.check_output([*command, "ls-files", "--others", "--exclude-standard", "--", *scopes])
@@ -102,7 +115,7 @@ def _window(spec, query, step):
     lo = int(query.get("start", spec["start_ms"]))
     hi = int(query.get("end", spec["end_ms"]))
     if lo < spec["start_ms"] or hi > spec["end_ms"] or lo >= hi:
-        raise ValueError("Choose a nonempty window inside the recorded development range")
+        raise ValueError("Choose a nonempty window inside the recorded backtest range")
     aligned_lo = max(spec["start_ms"], lo // step * step)
     aligned_hi = min(spec["end_ms"], -(-hi // step) * step)
     if -(-(aligned_hi - aligned_lo) // step) > MAX_CANDLES:
@@ -211,7 +224,12 @@ class Explorer:
         original = self.record(origin)
         verify_provenance(original)
         _settings(original)
-        self.selection(original)
+        sel = self.selection(original)
+        spec = original["specification"]
+        frozen = spec.get("strategy", {})
+        if ("warmup_fingerprint" in frozen and control_handlers.warmup_fingerprint(sel.dataset, spec, frozen)
+                != frozen["warmup_fingerprint"]):
+            _mismatch("The frozen historical warm-up inputs have changed.")
         if replay is not None and any(original["specification"].get(key) != replay.get(key) for key in BOUND_FIELDS):
             _mismatch("The queued replay specification differs from the original candidate.")
         return original
@@ -237,7 +255,7 @@ class Explorer:
             "name": f"{definition['name']} / Audit", "stage": "audit", "depends_on": [],
             "audit_of": origin, "replay_contract": 1, "candidates": [candidate],
         })
-        return control_store.submit(self.path, definition, control_handlers.validate)
+        return control_store.submit(self.path, definition, partial(control_handlers.validate, source=self.source))
 
     def check_replay_output(self, original, result, *, annotate=True):
         """Require exact accounting agreement before exposing the detailed artifact."""
@@ -245,7 +263,8 @@ class Explorer:
         if replay is None:
             return result
         fields = ("end", "risk", "execution_costs", "orders", "fills", "daily_marked_equity",
-                  "per_symbol", "symbols", "bar_range_ms")
+                  "per_symbol", "symbols", "bar_range_ms", "pre_close", "position_lifecycles",
+                  "execution_diagnostics")
         if any(baseline.get(field) != replay.get(field) for field in fields):
             _mismatch("Detailed replay failed accounting reconciliation against the original report.")
         if annotate:
@@ -278,6 +297,7 @@ class Explorer:
                 compatibility = str(error)
         return {"job": job, "hypothesis_id": self.origin_for_job(job)[0], "symbols": spec["universe"],
                 "start": spec["start_ms"], "end": spec["end_ms"], "timeframes": TIMEFRAMES,
+                "execution_model": record["outcome"]["metrics"].get("execution_model", "legacy_targets_v1"),
                 "detailed_job": detailed["id"] if detailed else None, "replay": replay,
                 "strategy": {key: spec["strategy"][key] for key in ("id", "version")} if "strategy" in spec else None,
                 "compatibility": compatibility, "ledger_tables": list(TABLES),
@@ -358,7 +378,8 @@ class Explorer:
         positions, ledger, totals = reconstruct(symbol, fills, funding, terminal, spec["end_ms"] + settings["lag"])
         selection = self.selection(record)
         if positions:
-            feed = MarketDataFeed(selection.dataset, [symbol], selection.start, selection.end)
+            feed = MarketDataFeed(selection.dataset, [symbol], selection.start, selection.end,
+                                  completed_clock=settings["lag"] == 0 and "quantity_step" in settings)
             feed.read_threads = False
             sample_marks(feed, ledger, positions, fallback=settings["trade_mark_fallback"])
         return positions, ledger, funding, totals
@@ -409,6 +430,8 @@ class Explorer:
             raise ValueError("Execution range is outside the candidate's booked clocks")
         settings = detailed["outcome"]["metrics"]["settings"]
         file = self._paths(detailed)[TABLES[resource]]
+        if "quantity_step" in settings and hi == spec["end_ms"]:
+            hi += 1  # Include the virtual terminal event without reading another market bar.
         scan = _scan(file, lo, hi, index)
         if resource == "rejected":
             scan = scan.filter(pl.col("filled") == 0)
@@ -420,6 +443,7 @@ class Explorer:
                 delta, after = pl.col("filled"), pl.col("after")
                 before = after - delta
                 predicates = {
+                    "terminal_close": (delta != 0) & (pl.col("reason") == 21),
                     "rejected": delta == 0, "reversal": (delta != 0) & (before * after < 0),
                     "long_entry": (delta != 0) & (before.abs() <= 1e-11) & (after > 0),
                     "short_entry": (delta != 0) & (before.abs() <= 1e-11) & (after < 0),
@@ -480,7 +504,7 @@ class Explorer:
         if len(targets) > MAX_LEDGER_ROWS:
             raise ValueError("Target series exceeds the per-symbol display budget")
         target_times, amounts = targets["ms"].to_numpy(), targets["notional"].to_numpy()
-        feed = MarketDataFeed(selection.dataset, [symbol], lo, hi)
+        feed = MarketDataFeed(selection.dataset, [symbol], lo, hi, completed_clock="quantity_step" in settings)
         feed.read_threads = False
         samples = {}
         for times, market, flags in feed.blocks(shared=True):
@@ -548,7 +572,11 @@ class Explorer:
         }
         for row in rows:
             observation = by_clock.get(row["decision"])
-            if observation is None or observation.get("target") is None or not np.isclose(observation["target"], row["target"]):
+            if observation is None:
+                continue
+            if frozen.get("execution_model") != "next_open_v2" and (
+                observation.get("target") is None or not np.isclose(observation["target"], row["target"])
+            ):
                 continue
             labels = []
             for plot in plots:

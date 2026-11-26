@@ -35,7 +35,7 @@ def hypothesis(market, name, *, candidates=2, **extra):
     }
 
 
-def test_submission_atomic_idempotent_and_holdout(market, tmp_path):
+def test_submission_atomic_idempotent_and_research_dates(market, tmp_path):
     db = tmp_path / "registry.sqlite"
     store.initialize(db)
     first = hypothesis(market, "Parent", key="first")
@@ -44,8 +44,6 @@ def test_submission_atomic_idempotent_and_holdout(market, tmp_path):
         store.submit(db, {"hypotheses": [first | {"depends_on": ["second"]}, second]}, validate)
     assert store.snapshot(db)["hypotheses"] == []
     holdout = first | {"key": "holdout", "protocol": first["protocol"] | {"start": HOLDOUT_START, "end": HOLDOUT_START + 5000}}
-    with pytest.raises(PermissionError):
-        store.submit(db, {"hypotheses": [first, holdout]}, validate)
     assert store.snapshot(db)["cursor"] == 0
     payload = {"campaign": "Fixtures", "hypotheses": [second, first]}
     submitted = store.submit(db, payload, validate)
@@ -55,6 +53,8 @@ def test_submission_atomic_idempotent_and_holdout(market, tmp_path):
     assert store.detail(db, child)["state"] == "blocked"
     assert store.detail(db, parent)["total"] == 2
     assert len({event["id"] for event in store.updates(db, 0)["events"]}) == 6
+    receipt = store.submit(db, holdout, validate)
+    assert store.detail(db, receipt["submission_ids"][0])["state"] == "queued"
 
 
 async def _sse(stream, predicate):

@@ -12,6 +12,11 @@ EPSILON = 1e-11
 REASONS = {
     0: "Filled", 1: "Partial fill", 2: "Risk limit",
     3: "Lot, participation, or minimum notional",
+    11: "Empty next bar", 12: "Missing next bar", 13: "Quarantined next bar",
+    14: "Before listing", 15: "Invalid execution open", 16: "Invalid or zero rounded quantity",
+    17: "Minimum opening notional", 18: "Insufficient buying power or account suspended",
+    19: "Configured exposure cap", 20: "Configured participation cap",
+    21: "END_OF_BACKTEST", 22: "RISK_LIQUIDATION", 23: "Outside trading range",
 }
 
 
@@ -32,23 +37,28 @@ def classify(row):
 def execution(row, step, lag):
     """Expose native clocks and accounting fields without interpolating the ledger."""
     filled = row["filled"]
-    kind = classify(row)
+    kind = "terminal_close" if row["reason"] == 21 and filled else classify(row)
+    explicit = row.get("id") is not None
+    old_id = f"{row['symbol']}:{row['ms']}"
     return row | {
-        "id": f"{row['symbol']}:{row['ms']}", "type": kind,
-        "side": "buy" if row["requested"] > 0 else "sell",
+        "id": f"{old_id}:{row.get('id') or row['reason']}" if explicit else old_id, "type": kind,
+        "order_id": row.get("id"),
+        "virtual": row["reason"] == 21,
+        "side": "buy" if (row["requested"] or filled or row.get("intent_size") or 0) > 0 else "sell",
         "signal_bar_start": row["decision"] - step - lag,
-        "execution_end": row["bar_start"] + step,
+        "execution_end": row["bar_start"] if explicit else row["bar_start"] + step,
         "filled_notional": abs(filled) * row["price"] if filled else 0,
         "partial": row["reason"] == 1, "reason_label": REASONS.get(row["reason"], "Unknown"),
     }
 
 
-def reconstruct(symbol, fills, funding, terminal, end_ms):
+def reconstruct(symbol, fills, funding, terminal, end_ms, *, detail=True):
     """Group one symbol's ordered native records without recalculating realized PnL."""
     current = None
     positions = []
     ledger = []
     quantity = 0.0
+    last_entry = None
     for row, kind in merge(
         ((row, 1) for row in fills), ((row, 0) for row in funding),
         key=lambda pair: (pair[0]["ms"], pair[1]),
@@ -57,7 +67,8 @@ def reconstruct(symbol, fills, funding, terminal, end_ms):
             if current is None or not isclose(row["qty"], quantity, abs_tol=EPSILON):
                 raise ValueError("Funding quantity disagrees with the native fill ledger")
             current["funding"] += row["payment"]
-            current["timeline"].append(row | {"type": "funding"})
+            if detail:
+                current["timeline"].append(row | {"type": "funding"})
             continue
         delta, closed, after = row["filled"], row["closed"], row["after"]
         amount = abs(delta)
@@ -74,7 +85,8 @@ def reconstruct(symbol, fills, funding, terminal, end_ms):
             position["fees"] += row["fee"] * ratio
             position["slippage"] += row["slippage"] * ratio
             position["executions"] += 1
-            position["timeline"].append(row | {
+            if detail:
+                position["timeline"].append(row | {
                 "allocation": role, "allocated_qty": allocation,
                 "allocated_fee": row["fee"] * ratio,
                 "allocated_slippage": row["slippage"] * ratio,
@@ -94,6 +106,7 @@ def reconstruct(symbol, fills, funding, terminal, end_ms):
             current["gross_realized"] += row["realized"]
             if after == 0 or reverses:
                 current["exit_ms"] = row["ms"]
+                current["terminal_close"] = row["reason"] == 21 if "reason" in row else False
                 current = None
         if opened > EPSILON:
             if current is None:
@@ -111,10 +124,12 @@ def reconstruct(symbol, fills, funding, terminal, end_ms):
             current["opened_qty"] += opened
             current["entry_value"] += opened * row["price"]
         quantity = after
+        last_entry = row["entry"]
         if current is not None:
             current["max_qty"] = max(current["max_qty"], abs(after))
             record["active_position"] = current["id"]
-        ledger.append(record)
+        if detail:
+            ledger.append(record)
 
     for position in positions:
         end = position["exit_ms"]
@@ -126,7 +141,7 @@ def reconstruct(symbol, fills, funding, terminal, end_ms):
             "net_pnl": position["gross_realized"] - position["fees"] + position["funding"],
             "unrealized": terminal["unrealized"] if position is current else None,
             "terminal_qty": quantity if position is current else 0.0,
-            "terminal_entry": ledger[-1]["entry"] if position is current else None,
+            "terminal_entry": last_entry if position is current else None,
         })
         position["return_on_opening_notional"] = (
             position["net_pnl"] + (position["unrealized"] or 0)

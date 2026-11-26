@@ -359,7 +359,10 @@ def build_app(service):
 
     async def submit(request):
         payload = await _body(request)
-        result = await asyncio.to_thread(store.submit, service.path, payload, handlers.validate)
+        result = await asyncio.to_thread(
+            store.submit, service.path, payload,
+            lambda candidate, spec: handlers.validate(candidate, spec, source=service.source),
+        )
         service.wake.set()
         service.signal(durable=True)
         return web.json_response(result, status=202, dumps=_json)

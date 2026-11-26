@@ -7,7 +7,7 @@ import numpy as np
 from . import cs, stats, ts
 from ._core import array, bars, divide, paired
 from .data import Block
-from .validation import HOLDOUT_START, _check
+from .validation import _check
 
 SELECTION_BIAS = (
     "Liquid 50 membership was selected using November 2026 activity and volume."
@@ -56,15 +56,8 @@ def forward_returns(block, horizon, *, field="close", logarithmic=False):
                 else divide(x[n:], x[:-n]) - 1
             )
         endpoint = block.available_at_ms[n:]
-        permitted = (
-            (endpoint < HOLDOUT_START)
-            if block.timestamps_ms[0] < HOLDOUT_START
-            else np.ones(len(endpoint), dtype=bool)
-        )
-        out[:-n] = np.where(
-            covered & np.isfinite(computed) & permitted[:, None], computed, np.nan
-        )
-        end[:-n] = np.where(permitted, endpoint, -1)
+        out[:-n] = np.where(covered & np.isfinite(computed), computed, np.nan)
+        end[:-n] = endpoint
     out.flags.writeable = False
     return Labels(
         block.timestamps_ms.copy(),

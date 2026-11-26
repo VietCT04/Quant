@@ -15,9 +15,9 @@ uv run python -m quant describe quant.ts.ema
 uv run python -m examples.research_sdk all
 ```
 
-See the [SDK quickstart](docs/SDK.md), [research protocol](docs/RESEARCH_PROTOCOL.md), and [Phase 3 benchmarks](docs/BENCHMARKS.md). The examples use development data. The reserved August 25 through November 24, 2026 UTC period requires separately recorded owner authorization for final evaluation.
+See the [SDK quickstart](docs/SDK.md), [research protocol](docs/RESEARCH_PROTOCOL.md), and [Phase 3 benchmarks](docs/BENCHMARKS.md). Research is authorized throughout the two-year archive. New research uses the [V2 next-open order model](docs/SIMULATOR_V2.md).
 
-## Portfolio simulator V1
+## Legacy portfolio simulator V1
 
 The simulator streams the audited Liquid 50 Parquet through Arrow and bounded, time-major NumPy blocks. A C++20 engine handles native strategy decisions, market execution and linear futures accounting. Python calls the engine once per block through a C ABI that releases the GIL. The engine uses integer symbol IDs and keeps positions, pending targets, executions and valuation state independent.
 
@@ -59,11 +59,11 @@ The target values are signed USDT notionals. A signal row is indexed by the bar'
 - Missing, quarantined, pre-listing and synthetic empty intervals have separate data states. Orders wait for a genuine tradable bar. Official mark candle closes become available after the minute closes plus 100 ms. Their default maximum age is one minute. Where a mark is unavailable, the default uses a genuine observed trade close as a marked fallback. During unobservable periods the last price remains only as an explicitly flagged indicative valuation. The engine blocks exposure increases while a held position is unmarked and allows reductions on eligible real bars. Funding events without reliable settlement marks are reported as omissions. An observed event sequence cannot establish that no unobserved funding changes occurred.
 - Wallet balance includes realized PnL, fees and funding. Equity also includes unrealized PnL. Initial margin uses configured leverage and maintenance uses a configurable flat rate. Margin breaches are indicative and do not trigger a modeled Binance liquidation. Current frozen lot and minimum-notional filters are approximate for historical dates. Simultaneous orders compete for capacity in stable feed symbol order. A configured drawdown stop queues flattening instructions at the time the breach is observable.
 
-### Reports and holdout
+### Legacy reports and archived research policy
 
 Each run produces `report.json`, `experiment.json` and Parquet tables for targets, orders, fills, positions, funding and equity. Symbol IDs in logs follow the `symbols` array in the report or row order for the position table. Sharpe and Sortino use UTC daily equity returns, with 365 days per year and zero risk-free rate. Holding-time and win/loss statistics describe closed reductions using average entry age and allocated fees. They differ from marked-to-market portfolio returns, which incorporate open positions and funding. Cost attribution uses modeled execution and exchange fee assumptions.
 
-Strategy runs end by August 25, 2026 UTC, exclusive. August 25 through November 24 is reserved for held-out evaluation. The November 2026 liquidity snapshot still introduces survivorship and historical selection bias. The supplied strategies and cost sensitivity runs verify infrastructure and mechanics.
+The historical holdout policy was superseded by the V2 owner specification. The November 2026 liquidity snapshot still introduces survivorship and historical selection bias. The supplied strategies and cost sensitivity runs verify infrastructure and mechanics.
 
 See [the simulator benchmark](BENCHMARK.md#portfolio-simulator-v1) for measured reader, engine and parallel-run results.
 

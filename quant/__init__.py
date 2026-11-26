@@ -26,6 +26,7 @@ __all__ = (
     "requests",
     "research",
     "strategy",
+    "trading",
 )
 
 

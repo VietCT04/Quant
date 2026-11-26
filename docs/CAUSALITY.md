@@ -8,4 +8,4 @@ A five-second bar starting at 00:00:00 with 100 ms lag is observable at 00:00:05
 
 Default EMA resets at unknown values. The migrated native EMA reference specifies its historical carry convention and retains existing execution checks. Test causal prefixes by changing future inputs. Test streaming state with multiple chunk sizes and unknown coverage.
 
-Ordinary selection, labels, experiments and simulation enforce the reserved evaluation period. Infrastructure selection requires explicit opt-in. Forward outcomes that become available at or after the development boundary are invalid for development. See [the research protocol](RESEARCH_PROTOCOL.md).
+Ordinary research uses the entire authorized archive. Forward labels stay inside the requested evaluation interval. V2 order decisions use completed-bar timestamps at zero processing latency, with execution at the immediately following scheduled open. See [the research protocol](RESEARCH_PROTOCOL.md).

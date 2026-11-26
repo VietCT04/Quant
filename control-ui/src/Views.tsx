@@ -93,7 +93,7 @@ export function System({ service, connected, configure }: { service: Service; co
       <section className="panel"><header className="panel-heading"><div><h2>Market data and connection</h2><p>Development workspace</p></div><Radio size={16} /></header>
         <dl className="spec-list system-spec"><dt>Event stream</dt><dd><Badge value={connected ? 'connected' : 'disconnected'} /></dd>
           <dt>Service uptime</dt><dd>{num(service.resources.uptime_seconds)} seconds</dd><dt>Universe</dt><dd>{coverage?.symbols ?? '—'} symbols · Liquid 50</dd><dt>Bar interval</dt><dd>{coverage?.interval_ms ? `${coverage.interval_ms / 1000}s` : '—'}</dd>
-          <dt>Audited coverage</dt><dd>{pct(coverage?.planned_coverage)}</dd><dt>Development range</dt><dd>2024-11-25 → 2026-08-25 UTC</dd><dt>Source</dt><dd className="source-path">{coverage?.source ?? '—'}</dd>
+          <dt>Audited coverage</dt><dd>{pct(coverage?.planned_coverage)}</dd><dt>Research range</dt><dd>2024-11-25 → 2026-11-25 UTC</dd><dt>Source</dt><dd className="source-path">{coverage?.source ?? '—'}</dd>
         </dl>{coverage?.error && <ErrorBox>{coverage.error}</ErrorBox>}
       </section>
     </div>

@@ -2,20 +2,24 @@
 
 from dataclasses import fields, replace
 from functools import partial
+from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
 
-from simulator.native import Settings
+from marketdata.model import sha256
+
+from simulator.native import OrderSettings, Settings
 from simulator.reporting import Logs
 
 from . import data, evaluate, features, math, research, simulator, strategy
 from ._batch import FIELDS
 from .experiment import _dump, _git
+from .validation import warmup_start
 
 KINDS = frozenset({"screen", "native", "audit"})
 SCREEN_OPTIONS = {"horizon", "method", "groups", "event_threshold"}
-SETTINGS = {field.name for field in fields(Settings)} - {"lag", "interval", "logging"}
+SETTINGS = {field.name for field in fields(OrderSettings)} - {"lag", "interval", "logging"}
 
 
 def _expressions(parameters):
@@ -59,7 +63,15 @@ def _target(block, notional, direction):
     return np.sign(_score(block.values, False)) * (notional * direction)
 
 
-def validate(candidate, spec):
+def warmup_fingerprint(dataset, spec, frozen):
+    start = warmup_start(spec["start_ms"], frozen["warmup_bars"], dataset.interval_ms)
+    if start == spec["start_ms"]:
+        return None
+    selection = data.select(dataset, start=start, end=spec["start_ms"], symbols=spec["universe"])
+    return data.fingerprint(selection)
+
+
+def validate(candidate, spec, *, source=None):
     if not isinstance(candidate, dict) or set(candidate) not in (
         {"kind", "parameters"}, {"kind", "parameters", "strategy"}
     ):
@@ -84,6 +96,8 @@ def validate(candidate, spec):
             raise ValueError("Notional must be positive and at most 1 billion USDT")
         if type(params.get("normalize", True)) is not bool:
             raise ValueError("normalize must be boolean")
+    if registered and kind != "screen" and strategy.is_order_strategy(candidate["strategy"]):
+        spec = spec | {"execution_model": "next_open_v2"}
     settings = effective_settings(spec, params, registered)
     if type(spec["evaluation"].get("prepared_cache", False)) is not bool:
         raise ValueError("prepared_cache must be boolean")
@@ -106,6 +120,8 @@ def validate(candidate, spec):
         )
         if kind != "screen" and evaluation.get("prepared_cache") and set(frozen["fields"]) - FIELDS.keys():
             raise ValueError("Prepared cache supports only close, volume, execution and mark. Extended fields share a direct scan.")
+        if isinstance(settings, OrderSettings) and source is not None:
+            frozen["warmup_fingerprint"] = warmup_fingerprint(data.open(source), spec, frozen)
         return {"parameters": normalized, "strategy": frozen}
     return None
 
@@ -120,7 +136,11 @@ def effective_settings(spec, parameters, registered):
     for name, value in (costs | overrides).items():
         if type(value) not in {int, float, bool} or not np.isfinite(value):
             raise ValueError(f"Invalid setting value for {name}")
-    return Settings(**(costs | overrides))
+    model = spec.get("execution_model", spec.get("strategy", {}).get("execution_model"))
+    settings = OrderSettings if model == "next_open_v2" else Settings
+    if set(costs | overrides) - {field.name for field in fields(settings)}:
+        raise ValueError("Setting is not supported by this execution model")
+    return settings(**(costs | overrides))
 
 
 def batch_key(job):
@@ -129,7 +149,10 @@ def batch_key(job):
     if spec["job_kind"] == "screen":
         options = {key: evaluation[key] for key in SCREEN_OPTIONS if key in evaluation}
     else:
-        options = {"prepared_cache": evaluation.get("prepared_cache", False)}
+        frozen = spec.get("strategy", {})
+        options = {"prepared_cache": evaluation.get("prepared_cache", False),
+                   "execution_model": frozen.get("execution_model"),
+                   "warmup_bars": frozen.get("warmup_bars") if frozen.get("execution_model") else None}
     if spec["job_kind"] == "audit":
         return job["id"]
     return _dump([*(spec[k] for k in ("start_ms", "end_ms", "universe", "dataset_fingerprint")), options])
@@ -148,6 +171,7 @@ def execute(kind, jobs, *, source, root, budgets, control):
     control.start(jobs, selection)
     candidates, failures, traces = [], {}, {}
     projection = {"close"}
+    native_digest = sha256(Path(__file__).resolve().parents[1] / "simulator" / "core.cpp")
     for job in jobs:
         spec = job["specification"]
         params = spec["parameters"]
@@ -155,9 +179,14 @@ def execute(kind, jobs, *, source, root, budgets, control):
         trace = None
         try:
             settings = effective_settings(spec, params, "strategy" in spec)
+            if spec.get("simulator_version") != native_digest:
+                raise ValueError("Incompatible frozen native runtime")
             if "strategy" in spec:
                 resolved = strategy.resolve_frozen(spec, settings, screen=kind == "screen")
                 _, plan, _, frozen = resolved
+                stored = spec["strategy"]
+                if "warmup_fingerprint" in stored and warmup_fingerprint(selection.dataset, spec, frozen) != stored["warmup_fingerprint"]:
+                    raise ValueError("Incompatible historical warm-up fingerprint")
                 if kind == "audit" and plan.plots:
                     trace = Logs(output / key, selection.symbols)
                 runner = strategy.Runner(resolved, selection.symbols, spec["seed"], trace=trace, end=selection.end)
@@ -168,6 +197,8 @@ def execute(kind, jobs, *, source, root, budgets, control):
                     candidates.append(simulator.Candidate(
                         key, runner, plan.features, config=settings, fields=tuple(frozen["fields"]),
                         feedback=frozen["feedback"], trace_width=len(plan.plots) if trace else 0,
+                        warmup_bars=plan.warmup_bars if isinstance(settings, OrderSettings) else 0,
+                        feature_periods=plan.feature_periods,
                     ))
                 if trace:
                     traces[key] = trace

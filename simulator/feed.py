@@ -38,12 +38,14 @@ def _marks(path):
 
 
 class MarketDataFeed:
-    def __init__(self, dataset, symbols, start, end, *, block_steps=4096, aux=True, mark_staleness_ms=MINUTE):
+    def __init__(self, dataset, symbols, start, end, *, block_steps=4096, aux=True, mark_staleness_ms=MINUTE, completed_clock=False, trading_start=None):
         self.dataset = dataset
         self.symbols = tuple(dataset._symbols(symbols))
         self.start, self.end = as_millis(start), as_millis(end)
+        self.trading_start = self.start if trading_start is None else as_millis(trading_start)
+        self.completed_clock = completed_clock
         self.step = dataset.interval_ms
-        self.lag = dataset.availability_lag_ms
+        self.lag = 0 if completed_clock else dataset.availability_lag_ms
         if not self.symbols or self.start >= self.end or self.start % self.step or self.end % self.step:
             raise ValueError("A nonempty universe and interval-aligned UTC range are required")
         self.block_steps = block_steps
@@ -70,7 +72,7 @@ class MarketDataFeed:
     def _settlements(self):
         pieces, warnings = [], []
         for i, symbol in enumerate(self.symbols):
-            start = max(self.start, self.listing[i])
+            start = max(self.trading_start, self.listing[i])
             if start >= self.end:
                 continue
             path = self.aux_root / "funding" / f"{symbol}.parquet"
@@ -149,16 +151,21 @@ class MarketDataFeed:
                 if table is not None:
                     offsets = (table["timestamp_ms"].to_numpy() - lo) // self.step
                     close, vol, quote, empty = (table[name].to_numpy() for name in FIELDS)
+                    if self.completed_clock:
+                        allowed = state[offsets] == MISSING
+                        offsets, close, vol, quote, empty = (x[allowed] for x in (offsets, close, vol, quote, empty))
                     state[offsets] = np.where(empty, EMPTY, TRADED)
                     values[offsets, i, 0] = close
                     values[offsets, i, 1] = np.divide(quote, vol, out=np.full_like(vol, np.nan), where=vol > 0)
                     values[offsets, i, 2] = vol
                     for name, projection in extras.items():
-                        projection[offsets, i] = table[name].to_numpy()
+                        column = table[name].to_numpy()
+                        projection[offsets, i] = column[allowed] if self.completed_clock else column
                 if self.aux and state[-1] != PRELISTING:
                     self._fill_marks(symbol, starts, clock, minute_keys, minute_index, values[:, i, 3])
                 values[state == PRELISTING, i, 3] = np.nan
-                self.mark_missing_slots[i] += np.count_nonzero(~np.isfinite(values[:, i, 3]) & (state != PRELISTING))
-                self.status_counts[:, i] += np.bincount(state, minlength=5)
+                actual = starts >= self.trading_start
+                self.mark_missing_slots[i] += np.count_nonzero(~np.isfinite(values[:, i, 3]) & (state != PRELISTING) & actual)
+                self.status_counts[:, i] += np.bincount(state[actual], minlength=5)
             self.profile["alignment_and_marks_seconds"] += perf_counter() - now
             yield (starts, values, flags, extras) if projected else (starts, values, flags)
