@@ -71,7 +71,7 @@ export function MarketChart(props: Props) {
     const palette = ['#7de0b6', '#91aaff', '#efc276', '#f090a3', '#aaa2ed', '#71c5dc']
     chart.panes()[0].setStretchFactor(expanded ? 510 : 340)
     let paneIndex = 0
-    const paneTitles: Record<string, string> = { signal: 'Signal · fast − slow', exposure: 'Symbol exposure · target / actual',
+    const paneTitles: Record<string, string> = { signal: 'Strategy signals and features', exposure: 'Symbol exposure',
       pnl: 'Symbol P&L · USDT', portfolio: 'Portfolio equity / exposure / drawdown' }
     const labels: Array<{ name: string; index: number }> = []
     const addPane = (name: string) => {

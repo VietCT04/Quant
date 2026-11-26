@@ -244,7 +244,7 @@ function Workspace({ base, meta, route, set }: { base: string; meta: Meta; route
       {panels.executions && revision && <MarkerLegend />}
       <div className="series-legends">
         {featureResult?.value?.features.map(feature => <span key={feature.name}><i style={{ backgroundColor: feature.color }} />{feature.label} · {feature.units}</span>)}
-        {revision && panels.exposure && <span>Exposure · target, actual marked notional, quantity, average entry{timeSeries?.value && !timeSeries.value.symbol.qty_steps ? ' · sampled view' : ''}</span>}
+        {revision && panels.exposure && <span>Exposure · {meta.execution_model === 'next_open_v2' ? '' : 'target, '}actual marked notional, quantity, average entry{timeSeries?.value && !timeSeries.value.symbol.qty_steps ? ' · sampled view' : ''}</span>}
         {revision && panels.pnl && <span>Symbol P&L · marked, realized, unrealized, fees, funding</span>}
         {revision && panels.portfolio && <span>Portfolio · equity, gross, net, running maximum drawdown</span>}
       </div>

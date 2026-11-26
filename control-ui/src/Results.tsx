@@ -109,7 +109,7 @@ function NativeTable({ trials, onSelect }: { trials: Trial[]; onSelect: (key: st
       <th key={key} aria-sort={metric === key ? descending ? 'descending' : 'ascending' : 'none'}>
         <button onClick={() => { if (metric === key) flip(!descending); else { sort(key); flip(key !== 'maximum_drawdown') } }}>{nativeMetrics[key]}</button>
       </th>)}</tr></thead><tbody>{visible.map(trial => <tr key={trial.id}>
-      <td><button onClick={() => onSelect(trial.id)}>{trial.id.slice(0, 8)}</button></td><td>{windowLabel(trial)}</td>
+      <td><button onClick={() => onSelect(trial.id)}>{trial.id.slice(0, 8)}</button></td><td className="mono" style={{ whiteSpace: "nowrap" }}>{windowLabel(trial)}</td>
       {keys.map(key => <td className="mono" key={key}>{['roi', 'maximum_drawdown', 'win_rate', 'success_rate'].includes(key)
         ? pct(trialMetric(trial, key)) : num(trialMetric(trial, key), ['completed_positions', 'fills'].includes(key) ? 0 : 3)}</td>)}
     </tr>)}</tbody></table>{!visible.length && <Empty title="No matching candidates">Change the recorded-metric filters.</Empty>}</div>
@@ -214,7 +214,7 @@ export function Results({ rows, selected, pick }: { rows: Hypothesis[]; selected
         return <section className="panel" key={trial.id}><header className="panel-heading"><div><h2>Candidate {index + 1} evidence</h2><p className="mono">{trial.id} / {windowLabel(trial)}</p></div></header>
           <div className="evidence-content">
             {robustness != null && <details open><summary>Recorded subperiod results</summary>{mode === 'native' ? <Monthly value={robustness} /> : <Json value={robustness} />}</details>}
-            {mode === 'native' && <details open><summary>Cost and risk assumptions</summary><Json value={{ ...trial.specification.costs, ...record(trial.specification.parameters.settings) }} /></details>}
+            {mode === 'native' && <details open><summary>Cost and risk assumptions</summary><Json value={metrics.settings ?? { ...trial.specification.costs, ...record(trial.specification.parameters.settings) }} /></details>}
             {mode === 'native' && <>
               <details open><summary>Execution diagnostics</summary><Json value={metrics.execution_diagnostics ?? { available: false }} /></details>
               <details><summary>Position P&L distribution</summary><PositionDistribution value={record(metrics.position_lifecycles).net_distribution} /></details>
