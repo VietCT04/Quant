@@ -119,8 +119,9 @@ class MarketDataFeed:
     def __iter__(self):
         return self.blocks()
 
-    def blocks(self, *, shared=False):
-        source = self.dataset.iter_symbol_slices(self.symbols, self.start, self.end, FIELDS,
+    def blocks(self, *, shared=False, projected=()):
+        fields = tuple(dict.fromkeys((*FIELDS, *projected)))
+        source = self.dataset.iter_symbol_slices(self.symbols, self.start, self.end, fields,
                                                  time_steps=self.block_steps, use_threads=self.read_threads)
         while True:
             now = perf_counter()
@@ -137,6 +138,7 @@ class MarketDataFeed:
             minute_index = clock_minute - clock_minute[0]
             values = np.full((len(starts), len(self.symbols), 4 if shared else 5), np.nan)
             flags = np.full(values.shape[:2], MISSING, dtype="u1")
+            extras = {name: np.full(flags.shape, np.nan) for name in projected}
             for i, (symbol, table) in enumerate(samples.items()):
                 intervals = self.quarantine[i]
                 state = flags[:, i]
@@ -151,10 +153,12 @@ class MarketDataFeed:
                     values[offsets, i, 0] = close
                     values[offsets, i, 1] = np.divide(quote, vol, out=np.full_like(vol, np.nan), where=vol > 0)
                     values[offsets, i, 2] = vol
+                    for name, projection in extras.items():
+                        projection[offsets, i] = table[name].to_numpy()
                 if self.aux and state[-1] != PRELISTING:
                     self._fill_marks(symbol, starts, clock, minute_keys, minute_index, values[:, i, 3])
                 values[state == PRELISTING, i, 3] = np.nan
                 self.mark_missing_slots[i] += np.count_nonzero(~np.isfinite(values[:, i, 3]) & (state != PRELISTING))
                 self.status_counts[:, i] += np.bincount(state, minlength=5)
             self.profile["alignment_and_marks_seconds"] += perf_counter() - now
-            yield starts, values, flags
+            yield (starts, values, flags, extras) if projected else (starts, values, flags)

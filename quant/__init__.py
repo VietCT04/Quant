@@ -25,6 +25,7 @@ __all__ = (
     "registry",
     "requests",
     "research",
+    "strategy",
 )
 
 

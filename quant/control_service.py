@@ -19,6 +19,7 @@ from marketdata.state import writer_lock
 
 from . import control_handlers as handlers, control_store as store, experiment, requests, research
 from .explorer import Explorer
+from . import strategy
 
 LOG = logging.getLogger(__name__)
 RECONCILE_SECONDS = 60
@@ -94,6 +95,7 @@ class Service:
         self.root, self.path, self.source, self.port = root, database, source, port
         self.web_root = web_root
         self.explorer = Explorer(database, root, source)
+        strategy.available()
         self.wake, self.stop, self.ready = Event(), Event(), Event()
         self.settings_lock = Lock()
         self.hardware = research.hardware()
@@ -362,6 +364,9 @@ def build_app(service):
         service.signal(durable=True)
         return web.json_response(result, status=202, dumps=_json)
 
+    async def strategies(request):
+        return web.json_response(strategy.available(), dumps=_json)
+
     async def queue(request):
         return web.json_response((await asyncio.to_thread(store.snapshot, service.path))["hypotheses"], dumps=_json)
 
@@ -471,7 +476,7 @@ def build_app(service):
     app.add_routes([
         web.get("/", index), web.get("/api/snapshot", snapshot),
         web.get(r"/api/explorer/{job:[a-f0-9]{32}}/{resource}", explore),
-        web.get("/api/queue", queue), web.post("/api/hypotheses", submit), web.post("/api/campaigns", submit),
+        web.get("/api/strategies", strategies), web.get("/api/queue", queue), web.post("/api/hypotheses", submit), web.post("/api/campaigns", submit),
         web.get("/api/hypotheses/{key}", details), web.get("/api/hypotheses/{key}/results", details),
         web.post("/api/hypotheses/{key}/audit", audit),
         web.post("/api/hypotheses/{key}/{operation}", action), web.post("/api/queue/{operation}", action),

@@ -116,6 +116,7 @@ def _submit(conn, jobs, hypothesis, common, max_attempts, *, namespace=None):
             "job_kind": kind,
             "dependencies": dependencies,
             "capabilities": capabilities,
+            **({"strategy": job["strategy"]} if "strategy" in job else {}),
         }
         fingerprint = {
             k: v for k, v in specification.items() if k != "candidate_count"

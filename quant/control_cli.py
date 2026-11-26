@@ -38,6 +38,7 @@ def arguments(commands):
         else:
             actions.add_parser("submit").add_argument("specification")
             actions.add_parser("queue")
+            actions.add_parser("strategies")
             actions.add_parser("inbox").add_argument("--unreviewed", action="store_true")
             for name in ("status", "cancel", "retry", "results", "acknowledge", "priority", "audit", "verdict"):
                 command = actions.add_parser(name)
@@ -151,6 +152,8 @@ def _research(args):
     if command == "submit":
         path = Path(args.specification)
         return request(args.port, "/hypotheses", json.loads(path.read_text(encoding="utf-8-sig")))
+    if command == "strategies":
+        return request(args.port, "/strategies")
     if command == "queue":
         return request(args.port, "/queue")
     if command == "inbox":

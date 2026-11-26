@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS control_hypotheses (
     created TEXT NOT NULL, definition TEXT NOT NULL, priority INTEGER NOT NULL,
     verdict TEXT, verdict_note TEXT, acknowledged INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS control_strategy_versions (
+    id TEXT NOT NULL, version TEXT NOT NULL, implementation_hash TEXT NOT NULL,
+    PRIMARY KEY(id,version)
+);
 CREATE TABLE IF NOT EXISTS control_trials (
     hypothesis INTEGER NOT NULL REFERENCES control_hypotheses(seq),
     job TEXT UNIQUE NOT NULL REFERENCES research_jobs(id),
@@ -153,11 +157,10 @@ def _definition(item, validate):
         protocol["dataset_fingerprint"], protocol.get("seed", 0),
         protocol.get("features", []), protocol["evaluation"], protocol.get("costs", {}), len(candidates),
     )
-    for candidate in candidates:
-        validate(candidate, common)
-    if len({_identity(c) for c in candidates}) != len(candidates):
+    prepared = [candidate | (validate(candidate, common) or {}) for candidate in candidates]
+    if len({_identity(candidate) for candidate in prepared}) != len(candidates):
         raise ValueError("Candidate configurations must be distinct within a hypothesis")
-    return common, rank, retries
+    return common, rank, retries, prepared
 
 
 def submit(path, payload, validate):
@@ -186,7 +189,7 @@ def submit(path, payload, validate):
         pending = set(staged)
         while pending:
             count = len(pending)
-            for key, (item, common, rank, retries) in staged.items():
+            for key, (item, common, rank, retries, prepared) in staged.items():
                 if key not in pending:
                     continue
                 refs = item.get("depends_on", [])
@@ -198,7 +201,22 @@ def submit(path, payload, validate):
                     ids = _job_ids(db, dep)
                     dependencies.extend(ids)
                 frozen = item | {"depends_on": [identifier(dep) for dep in sorted(set(seqs))]}
-                identity = _identity([campaign_id, {k: v for k, v in frozen.items() if k != "priority"}])
+                configuration = [campaign_id, {k: v for k, v in frozen.items() if k != "priority"}]
+                if any("strategy" in candidate for candidate in prepared):
+                    configuration.append(prepared)
+                for candidate in prepared:
+                    if "strategy" not in candidate:
+                        continue
+                    binding = candidate["strategy"]
+                    selector = binding["id"], binding["version"]
+                    db.execute("INSERT OR IGNORE INTO control_strategy_versions VALUES(?,?,?)",
+                               (*selector, binding["implementation_hash"]))
+                    recorded = db.execute(
+                        "SELECT implementation_hash FROM control_strategy_versions WHERE id=? AND version=?", selector,
+                    ).fetchone()[0]
+                    if recorded != binding["implementation_hash"]:
+                        raise ValueError(f"Strategy {selector[0]} {selector[1]} changed. Register a new version.")
+                identity = _identity(configuration)
                 existing = db.execute("SELECT seq FROM control_hypotheses WHERE identity=?", (identity,)).fetchone()
                 if existing:
                     seq = existing["seq"]
@@ -209,8 +227,11 @@ def submit(path, payload, validate):
                     ).lastrowid
                     jobs = [
                         {"kind": candidate["kind"], "parameters": candidate.get("parameters", {}),
-                         "depends_on": dependencies, "capabilities": item.get("capabilities", [])}
-                        for candidate in item["candidates"]
+                         "depends_on": dependencies, "capabilities": item.get("capabilities", []) + [
+                             {"name": name} for name in candidate.get("strategy", {}).get("capabilities", [])
+                             if name not in {cap["name"] for cap in item.get("capabilities", [])}
+                         ], **({"strategy": candidate["strategy"]} if "strategy" in candidate else {})}
+                        for candidate in prepared
                     ]
                     ids = research._submit(db, jobs, item["mechanism"], common, retries, namespace=identifier(seq))
                     db.executemany("INSERT INTO control_trials VALUES(?,?,?)", [(seq, job, i) for i, job in enumerate(ids)])

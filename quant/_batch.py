@@ -21,7 +21,7 @@ from . import features
 from ._core import array
 from ._prepared import prepared
 from ._resources import hardware, worker_count
-from .data import Block, Selection, fingerprint
+from .data import UNITS, Block, Selection, fingerprint
 from .validation import HOLDOUT_START, _check
 
 MODES = {"benchmark": 0, "summary": 2, "standard": 1, "audit": 1}
@@ -42,6 +42,9 @@ class Candidate:
     expressions: dict = field(default_factory=dict)
     config: object = None
     allocation: tuple | None = None
+    fields: tuple = ()
+    feedback: bool = False
+    trace_width: int = 0
 
 
 @dataclass
@@ -75,8 +78,9 @@ def _validate(candidates):
             or (c.decision is None) == (c.allocation is None)
             or c.decision is not None
             and not callable(c.decision)
-            or c.allocation is not None
-            and c.expressions
+            or c.allocation is not None and (c.expressions or c.feedback or c.fields)
+            or set(c.fields) - (UNITS.keys() | FIELDS.keys())
+            or type(c.trace_width) is not int or c.trace_width < 0
         ):
             raise ValueError(
                 "Candidates need unique safe names and a callback or static allocation"
@@ -109,12 +113,16 @@ class _Trial:
             raise ValueError("Static allocations must be finite")
         self.engine = Engine(self.settings, rules, candidate.allocation)
         self.daily = {}
+        self.portfolio_clock = None
+        self.initial_equity = config.initial_wallet
         self.mode = mode
         self.logs = (
             Logs(self.directory, feed.symbols) if self.settings.logging == 1 else None
         )
 
     def advance(self, starts, market, status, funding, block, at_boundary):
+        if self.candidate.feedback:
+            return self._advance_feedback(starts, market, status, funding, block, at_boundary)
         decision = self.candidate.decision
         clock = perf_counter()
         target = None
@@ -131,20 +139,71 @@ class _Trial:
         engine_seconds = perf_counter() - clock
         clock = perf_counter()
         if self.logs is not None:
-            orders = self.engine.orders()
-            for key, records in (
-                ("orders", orders),
-                ("fills", orders[orders["filled"] != 0]),
-                ("equity", self.engine.curve()),
-                ("targets", self.engine.targets()),
-                ("funding", self.engine.cashflows()),
-            ):
+            for key, records in self._logs():
                 self.logs.append(key, records)
         elif self.mode == "summary":
-            curve = self.engine.curve()
-            for ms, equity in zip(curve["ms"], curve["equity"]):
-                self.daily[int((ms - self.settings.lag - 1) // DAY)] = float(equity)
+            self._record_daily()
         return signal_seconds, engine_seconds, perf_counter() - clock
+
+    def _logs(self):
+        orders = self.engine.orders()
+        return (
+            ("orders", orders), ("fills", orders[orders["filled"] != 0]),
+            ("equity", self.engine.curve()), ("targets", self.engine.targets()),
+            ("funding", self.engine.cashflows()),
+        )
+
+    def _record_daily(self):
+        curve = self.engine.curve()
+        for ms, equity in zip(curve["ms"], curve["equity"]):
+            self.daily[int((ms - self.settings.lag - 1) // DAY)] = float(equity)
+
+    def _advance_feedback(self, starts, market, status, funding, block, at_boundary):
+        from .strategy import Portfolio
+
+        decision = self.candidate.decision
+        signal_seconds = engine_seconds = logging_seconds = 0.0
+        previous = funding_cursor = 0
+        logs = {key: [] for key in ("orders", "fills", "equity", "targets", "funding")}
+
+        def run(stop, value=None):
+            nonlocal previous, funding_cursor, engine_seconds, logging_seconds
+            clock = perf_counter()
+            end_clock = int(block.available_at_ms[stop - 1])
+            funding_stop = np.searchsorted(funding["ms"], end_clock, side="right")
+            self.engine.run_shared(starts[previous:stop], market[previous:stop], status[previous:stop],
+                                   funding[funding_cursor:funding_stop], targets=value)
+            previous, funding_cursor = stop, funding_stop
+            self.portfolio_clock = end_clock
+            engine_seconds += perf_counter() - clock
+            clock = perf_counter()
+            if self.logs is not None:
+                for key, records in self._logs():
+                    logs[key].append(records)
+            elif self.mode == "summary":
+                self._record_daily()
+            logging_seconds += perf_counter() - clock
+
+        for row in decision.feedback_rows(block):
+            if at_boundary and block.available_at_ms[row] >= HOLDOUT_START:
+                break
+            if row > previous:
+                run(row)
+            clock = perf_counter()
+            positions = self.engine.positions()
+            positions.flags.writeable = False
+            equity = self.initial_equity if self.portfolio_clock is None else float(self.engine.equity()["equity"])
+            value = decision.step(block, row, Portfolio(self.portfolio_clock, positions, equity))
+            signal_seconds += perf_counter() - clock
+            run(row + 1, value)
+        if previous < len(starts):
+            run(len(starts))
+        clock = perf_counter()
+        decision.finish_feedback(block)
+        if self.logs is not None:
+            for key, pieces in logs.items():
+                self.logs.append(key, np.concatenate(pieces) if len(pieces) > 1 else pieces[0])
+        return signal_seconds, engine_seconds, logging_seconds + perf_counter() - clock
 
     def finish(self, feed, *, archive=None):
         from .simulator import Result
@@ -274,6 +333,9 @@ def run_batch(
             raise ValueError("Keep cache and output in separate directories")
     budget = int(disk_budget_gib * (1 << 30))
     reserved = _report_reservation(data, len(candidates), logging)
+    if logging == "audit":
+        ticks = (data.end - data.start) // data.dataset.interval_ms
+        reserved += ticks * len(data.symbols) * sum(128 + 8 * c.trace_width for c in candidates if c.trace_width)
     already_written = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     if already_written + reserved > budget or reserved > shutil.disk_usage(out).free:
         raise MemoryError("Report reservation exceeds the available disk budget")
@@ -332,10 +394,11 @@ def run_batch(
                     }
                 )
                 live = min(worker_limit, len(wave))
+                extra_fields = tuple(sorted({name for c in wave for name in c.fields} - FIELDS.keys()))
+                trace_bytes = 8 * max((c.trace_width for c in wave), default=0) if logging == "audit" else 0
                 per_cell = (
-                    128
-                    + 32 * len(graph)
-                    + live * (1024 if logging in {"standard", "audit"} else 48)
+                    128 + 24 * len(extra_fields) + 32 * len(graph)
+                    + live * ((1024 if logging in {"standard", "audit"} else 48) + 3 * trace_bytes)
                 )
                 persistent = 16384 * len(wave) * n
                 if memory_cap - persistent >= n * per_cell:
@@ -372,6 +435,7 @@ def run_batch(
                                         c.config,
                                         c.allocation,
                                         sorted(c.expressions.items()),
+                                        *((c.fields, c.feedback) if c.fields or c.feedback else ()),
                                     )
                                     for c in wave
                                 ]
@@ -418,9 +482,9 @@ def run_batch(
                     failures[c.name] = f"{type(error).__name__}: {error}"
             profile["feature_nodes"] += len(graph)
             clock = perf_counter()
-            source = iter(
-                prepared(data, feed, cache_directory, caches, profile, cancel)
-            )
+            # Extended fields share the native feed's projected Parquet scan.
+            source = iter(feed.blocks(shared=True, projected=extra_fields) if extra_fields
+                          else prepared(data, feed, cache_directory, caches, profile, cancel))
             base = None
             current = None
 
@@ -438,8 +502,8 @@ def run_batch(
                     profile["market_seconds"] += perf_counter() - clock
                     if current is None:
                         return
-                    starts, market, status = current
-                    for arr in current:
+                    starts, market, status = current[:3]
+                    for arr in (starts, market, status):
                         arr.flags.writeable = False
                     missing = status > 1
                     any_missing = missing.any()
@@ -450,6 +514,11 @@ def run_batch(
                             x = np.where(missing, np.nan, x)
                         x.flags.writeable = False
                         values[f] = x
+                    if extra_fields:
+                        for name, projection in current[3].items():
+                            projection[missing] = np.nan
+                            projection.flags.writeable = False
+                            values[name] = projection
                     available = starts + feed.step + feed.lag
                     available.flags.writeable = False
                     clock = perf_counter()
@@ -460,7 +529,7 @@ def run_batch(
                         status,
                         values,
                         feed.step,
-                        {f: unit for f, (idx, unit) in FIELDS.items()},
+                        {f: unit for f, (idx, unit) in FIELDS.items()} | {f: UNITS[f] for f in extra_fields},
                         ("prepared_native",),
                     )
                     yield base
@@ -504,7 +573,7 @@ def run_batch(
                     if not trials:
                         break
                     profile["feature_seconds"] += perf_counter() - clock
-                    starts, market, status = current
+                    starts, market, status = current[:3]
                     profile["market_blocks"] += 1
                     profile["scheduled_cells"] += status.size
                     profile["observed_bars"] += int(np.count_nonzero(status <= 1))

@@ -1,7 +1,7 @@
 """Bounded development diagnostics reusing scores' feature nodes and forward labels."""
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 
 import numpy as np
@@ -18,6 +18,7 @@ class ScreenCandidate:
     name: str
     expressions: dict
     score: object
+    with_block: bool = False
 
 
 class _Metrics:
@@ -170,7 +171,7 @@ def screen(
             plan = features.plan({alias: node for node, alias in merged.items()})
             profile["feature_nodes"] += len(plan)
             per_row = len(selection.symbols) * (
-                128 + 32 * len(merged) + 128 * min(len(wave), count)
+                128 + 16 * len(selection.fields) + 32 * len(merged) + 128 * min(len(wave), count)
             )
             steps = min(block_steps, cap // per_row)
             if steps < 1:
@@ -274,7 +275,12 @@ def screen(
                                 for name, node in c.expressions.items()
                             }
                         )
-                        score = array(c.score(named))
+                        if c.with_block:
+                            units = {name: block.units[name] for name in selection.fields}
+                            units.update({name: node.units for name, node in c.expressions.items()})
+                            score = array(c.score(replace(block, values=named, units=units)))
+                        else:
+                            score = array(c.score(named))
                         if score.shape != block.status.shape:
                             raise ValueError(
                                 "Screen score must follow [time,symbol] axes"

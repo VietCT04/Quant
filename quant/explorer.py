@@ -14,9 +14,8 @@ import numpy as np
 import polars as pl
 
 from simulator.feed import TRADED, EMPTY, MarketDataFeed
-from simulator.native import Settings
 
-from . import __version__, control_handlers, control_store, data, experiment, features
+from . import __version__, control_handlers, control_store, data, experiment, features, strategy
 from ._batch import FIELDS
 from .explorer_ledger import accounting_at, execution, reconstruct, sample_marks
 from .validation import _check
@@ -33,7 +32,7 @@ MAX_LEDGER_ROWS = 200_000
 MAX_FEATURE_CELLS = 12_000_000
 BOUND_FIELDS = ("start_ms", "end_ms", "universe", "dataset_fingerprint", "parameters",
                 "sdk_version", "simulator_version", "evaluation", "seed", "features",
-                "costs", "capabilities")
+                "costs", "capabilities", "strategy")
 COLORS = ("#efc276", "#91aafa", "#79d5c1", "#eb9ac3")
 
 
@@ -41,9 +40,20 @@ def _mismatch(message):
     raise ValueError(f"Exact replay is incompatible. {message}")
 
 
-def verify_provenance(record):
+def verify_provenance(record, *, features_only=False):
     """Conservatively compare trusted execution source to the clean recorded revision."""
     spec = record["specification"]
+    if "strategy" in spec:
+        if spec.get("sdk_version") != __version__ or spec.get("simulator_version") != hashlib.sha256(
+            (Path(__file__).resolve().parents[1] / "simulator" / "core.cpp").read_bytes()
+        ).hexdigest():
+            _mismatch("The recorded SDK or simulator version differs.")
+        try:
+            settings = control_handlers.effective_settings(spec, spec["parameters"], True)
+            strategy.resolve_frozen(spec, settings)
+        except ValueError as error:
+            _mismatch(str(error))
+        return
     provenance = (record.get("outcome") or {}).get("execution", {})
     git = provenance.get("git") or {}
     commit = git.get("commit") or ""
@@ -58,6 +68,13 @@ def verify_provenance(record):
     scopes = ["quant", "simulator", "marketdata", "uv.lock",
               ":(exclude)quant/control_service.py", ":(exclude)quant/control_store.py",
               ":(exclude)quant/control_cli.py", ":(exclude,glob)quant/explorer*.py"]
+    if features_only:
+        # Legacy display projects close, then evaluates only the archived SDK graph.
+        # Batch scheduling and extended columns are outside this calculation.
+        scopes.extend([":(exclude)quant/_batch.py", ":(exclude)quant/_screen.py",
+                       ":(exclude)quant/control_handlers.py", ":(exclude)quant/research.py",
+                       ":(exclude)quant/strategy.py", ":(exclude)quant/__init__.py",
+                       ":(exclude)simulator/feed.py"])
     command = ["git", "-C", str(root), "-c", f"safe.directory={root.as_posix()}"]
     try:
         delta = subprocess.check_output([*command, "diff", "--name-only", commit, "--", *scopes], stderr=subprocess.STDOUT)
@@ -72,7 +89,7 @@ def verify_provenance(record):
 
 def _settings(record):
     spec = record["specification"]
-    effective = asdict(Settings(**(spec["costs"] | spec["parameters"].get("settings", {}))))
+    effective = asdict(control_handlers.effective_settings(spec, spec["parameters"], "strategy" in spec))
     original = record["outcome"]["metrics"]["settings"]
     differences = set(original) ^ set(effective)
     differences |= {key for key in original.keys() & effective.keys()
@@ -178,7 +195,7 @@ class Explorer:
         paths = {}
         for stored in record["outcome"]["artifacts"]:
             path = Path(stored).resolve()
-            if path.is_relative_to(root) and path.is_file() and path.suffix == ".parquet" and path.stem in ARTIFACTS:
+            if path.is_relative_to(root) and path.is_file() and path.suffix == ".parquet" and path.stem in (*ARTIFACTS, "strategy_trace"):
                 paths[path.stem] = path
         return paths
 
@@ -212,9 +229,13 @@ class Explorer:
             return {"campaign_id": None, "submission_ids": [previous["hypothesis_id"]]}
         definition = dict(control_store.detail(self.path, key)["definition"])
         definition.pop("key", None)
+        spec = original["specification"]
+        candidate = {"kind": "audit", "parameters": spec["parameters"]}
+        if "strategy" in spec:
+            candidate["strategy"] = {key: spec["strategy"][key] for key in ("id", "version")}
         definition.update({
             "name": f"{definition['name']} / Audit", "stage": "audit", "depends_on": [],
-            "audit_of": origin, "replay_contract": 1, "candidates": [{"kind": "audit", "parameters": original["specification"]["parameters"]}],
+            "audit_of": origin, "replay_contract": 1, "candidates": [candidate],
         })
         return control_store.submit(self.path, definition, control_handlers.validate)
 
@@ -228,7 +249,7 @@ class Explorer:
         if any(baseline.get(field) != replay.get(field) for field in fields):
             _mismatch("Detailed replay failed accounting reconciliation against the original report.")
         if annotate:
-            result["execution"] |= {"exact_replay_of": original["id"], "original_revision": original["outcome"]["execution"]["git"]["commit"]}
+            result["execution"] |= {"exact_replay_of": original["id"], "original_revision": original["outcome"]["execution"].get("git", {}).get("commit")}
         return result
 
     def _latest_replay(self, job):
@@ -258,6 +279,7 @@ class Explorer:
         return {"job": job, "hypothesis_id": self.origin_for_job(job)[0], "symbols": spec["universe"],
                 "start": spec["start_ms"], "end": spec["end_ms"], "timeframes": TIMEFRAMES,
                 "detailed_job": detailed["id"] if detailed else None, "replay": replay,
+                "strategy": {key: spec["strategy"][key] for key in ("id", "version")} if "strategy" in spec else None,
                 "compatibility": compatibility, "ledger_tables": list(TABLES),
                 "funding_warnings": record["outcome"]["metrics"].get("funding_warnings", [])}
 
@@ -354,7 +376,9 @@ class Explorer:
             if item is None:
                 raise KeyError(key)
             offset, limit = _bounded_page(query)
-            return {"position": _compact([item])[0], "rows": item["timeline"][offset:offset + limit],
+            timeline = [dict(row) for row in item["timeline"][offset:offset + limit]]
+            self.rationale(detailed, [row for row in timeline if "decision" in row], _symbol(spec, query)[1])
+            return {"position": _compact([item])[0], "rows": timeline,
                     "total": len(item["timeline"])}
         lo = int(query.get("start", spec["start_ms"]))
         hi = int(query.get("end", spec["end_ms"] + 1000))
@@ -424,7 +448,7 @@ class Explorer:
         total = int(scan.select(pl.len()).collect(engine="streaming").item())
         rows = scan.slice(offset, limit).collect(engine="streaming").to_dicts()
         if resource in {"fills", "orders", "rejected"}:
-            rows = [execution(row, settings["interval"], settings["lag"]) for row in rows]
+            rows = self.rationale(detailed, [execution(row, settings["interval"], settings["lag"]) for row in rows], index)
         return {"rows": [row | {"symbol_name": symbol} for row in rows], "total": total}
 
     def series(self, original, detailed, query):
@@ -498,11 +522,48 @@ class Explorer:
             values["target_steps"] = targets
         return values
 
+    def trace_series(self, original, detailed, query):
+        spec = original["specification"]
+        frozen = spec["strategy"]
+        _, index = _symbol(spec, query)
+        size = TIMEFRAMES[query.get("tf", "15m")] * 1000
+        lo, hi = _window(spec, query, size)
+        path = self._paths(detailed).get("strategy_trace")
+        if path is None:
+            return {"features": [], "series": {}}
+        return _trace_window(path, index, lo, hi, size, json.dumps(frozen, sort_keys=True), detailed["id"], spec["dataset_fingerprint"])
+
+    def rationale(self, detailed, rows, index):
+        frozen = detailed["specification"].get("strategy", {})
+        plots = [plot for plot in frozen.get("plots", []) if plot["labels"]]
+        path = self._paths(detailed).get("strategy_trace")
+        if not (plots and path and rows):
+            return rows
+        by_clock = {
+            row["available_ms"]: row for row in _scan(path, symbol=index,
+                columns=["ms", "available_ms", *[p["name"] for p in plots], *(
+                    ["target"] if any(p["name"] == "target" for p in frozen["plots"]) else []
+                )]).filter(pl.col("available_ms").is_in(sorted({row["decision"] for row in rows})))
+                .collect(engine="streaming").iter_rows(named=True)
+        }
+        for row in rows:
+            observation = by_clock.get(row["decision"])
+            if observation is None or observation.get("target") is None or not np.isclose(observation["target"], row["target"]):
+                continue
+            labels = []
+            for plot in plots:
+                value = observation[plot["name"]]
+                if value is not None:
+                    labels.append(str(plot["labels"].get(str(int(value)), value)))
+            if labels:
+                row["decision_rationale"] = " / ".join(labels)
+        return rows
+
     def feature_series(self, record, query):
         origin = record["outcome"]["execution"].get("exact_replay_of")
         if origin:
             record = self.record(origin)
-        verify_provenance(record)
+        verify_provenance(record, features_only=True)
         selection = self.selection(record)
         spec = record["specification"]
         _, index = _symbol(spec, query)
@@ -565,9 +626,13 @@ class Explorer:
             return self.meta(record)
         if resource == "candles":
             return self.candles(record, query)
-        if resource == "features":
+        if resource == "features" and "strategy" not in record["specification"]:
             return self.feature_series(record, query)
         detailed = self._detailed(record, self._latest_replay(job))
+        if resource == "features" and "strategy" in record["specification"]:
+            if detailed is None:
+                raise ValueError("Generate detailed replay to display recorded strategy observations.")
+            return self.trace_series(record, detailed, query)
         if detailed is None:
             raise ValueError("Detailed execution data is not available. Generate detailed replay.")
         if resource == "positions":
@@ -577,6 +642,40 @@ class Explorer:
         if resource in TABLES:
             return self.events(record, detailed, resource, query)
         raise KeyError(resource)
+
+
+@lru_cache(maxsize=24)
+def _trace_window(path, index, lo, hi, size, frozen_json, job, fingerprint):
+    frozen = json.loads(frozen_json)
+    plots = frozen["plots"]
+    if not plots:
+        return {"features": [], "series": {}}
+    graph = frozen["graph"]
+    scan = _scan(path, lo, hi, index, ["ms", "available_ms", *[plot["name"] for plot in plots]])
+    aggregation = []
+    for index, plot in enumerate(plots):
+        name = plot["name"]
+        def sample(column):
+            value = pl.col(column)
+            return value.last() if name in graph else value.filter(pl.col(name).is_not_null()).last()
+        aggregation.extend([sample(name).alias(name), sample("ms").alias(f"__{index}_ms"),
+                            sample("available_ms").alias(f"__{index}_available")])
+    rows = scan.group_by((pl.col("ms") // size * size).alias("bucket")).agg(*aggregation).sort("bucket")
+    result = rows.collect(engine="streaming").to_dicts()
+    provenance = {"job": job, "fingerprint": fingerprint, "implementation_hash": frozen["implementation_hash"],
+                  "timestamp_columns": ["display_bucket", "value", "source_bar_start", "available_at"],
+                  "sampling": "Last recorded value in each display bucket. Non-feature series may be sparse."}
+    descriptors = [
+        {"function": "recorded_strategy_output", **graph.get(plot["name"], {}), **plot,
+         "parameters": graph.get(plot["name"], {}).get("parameters", {}) | {"thresholds": plot["thresholds"]},
+         "provenance": provenance}
+        for plot in plots
+    ]
+    return {"features": descriptors, "series": {
+        plot["name"]: [[row["bucket"], row[plot["name"]], row[f"__{index}_ms"],
+                         row[f"__{index}_available"]] for row in result]
+        for index, plot in enumerate(plots)
+    }}
 
 
 def _csv(rows):
