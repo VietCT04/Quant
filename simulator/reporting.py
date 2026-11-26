@@ -49,6 +49,48 @@ class Logs:
                 replace_file(self.folder / f"{name}.part", self.folder / f"{name}.parquet")
 
 
+class SummaryLogs:
+    """Retain small summary ledgers in memory and spill large ones to the audit format."""
+
+    def __init__(self, folder, symbols, limit):
+        self.folder, self.symbols, self.limit = folder, symbols, limit
+        self.chunks = {}
+        self.bytes = 0
+        self.disk = None
+
+    def append(self, name, block):
+        if self.disk is None and self.bytes + block.nbytes > self.limit:
+            self.disk = Logs(self.folder, self.symbols)
+            for key, chunks in self.chunks.items():
+                for chunk in chunks:
+                    self.disk.append(key, chunk)
+            self.chunks.clear()
+        if self.disk is not None:
+            self.disk.append(name, block)
+        else:
+            chunks = self.chunks.setdefault(name, [])
+            if len(block) or not chunks:
+                chunks.append(block)
+                self.bytes += block.nbytes
+
+    def close(self, commit):
+        if self.disk is not None:
+            self.disk.close(commit)
+        if not commit:
+            self.chunks.clear()
+
+    def lifecycles(self, positions, end):
+        records = None
+        if self.disk is None:
+            records = []
+            for name in ("fills", "funding"):
+                chunks = self.chunks[name]
+                rows = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
+                records.append(pl.DataFrame({key: rows[key] for key in rows.dtype.names}))
+            self.chunks.clear()
+        return order_lifecycles(self.folder, self.symbols, positions, end, records=records)
+
+
 def performance(folder, settings, final, positions, feed, *, daily=None):
     wallet = settings.initial_wallet
     if daily is None:
@@ -135,7 +177,7 @@ def closed_reductions(folder):
     }
 
 
-def order_lifecycles(folder, symbols, positions, end):
+def order_lifecycles(folder, symbols, positions, end, *, records=None):
     """Summarize completed lifecycles using the same ledger grouping as Explorer."""
     from quant.explorer_ledger import reconstruct
 
@@ -149,8 +191,11 @@ def order_lifecycles(folder, symbols, positions, end):
             return sum(m.row_group(i).total_byte_size for i in range(m.num_row_groups))
 
     # Read and partition small event logs once instead of decoding every row group per symbol.
-    grouped = ([pl.read_parquet(path).partition_by("symbol", as_dict=True) for path in paths]
-               if sum(map(uncompressed, paths)) <= 64 << 20 else None)
+    if records is not None:
+        grouped = [table.partition_by("symbol", as_dict=True) for table in records]
+    else:
+        grouped = ([pl.read_parquet(path).partition_by("symbol", as_dict=True) for path in paths]
+                   if sum(map(uncompressed, paths)) <= 64 << 20 else None)
     for i, symbol in enumerate(symbols):
         if grouped is None:
             queries = (pl.scan_parquet(path).filter(pl.col("symbol") == i) for path in paths)

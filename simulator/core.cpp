@@ -563,8 +563,10 @@ EXPORTED ShockFeatures* sim_shock_features_create(std::size_t n, int flow, int r
     try { return new ShockFeatures(n, flow != 0, range != 0); } catch (...) { return nullptr; }
 }
 EXPORTED void sim_shock_features_delete(ShockFeatures* self) { delete self; }
-EXPORTED int sim_shock_features_run(ShockFeatures* self, const double* close, const double* quote,
+EXPORTED int sim_shock_features_run_shard(ShockFeatures* self, const double* close, const double* quote,
                                      const double* buy, const double* sell, const unsigned char* status,
-                                     std::size_t rows, double* out) {
-    try { self->evaluate(close, quote, buy, sell, status, rows, out); return 0; } catch (...) { return -1; }
+                                     std::size_t rows, double* out, unsigned char* ready,
+                                     std::size_t warmup, std::size_t position, std::size_t first, std::size_t last) {
+    try { self->evaluate(close, quote, buy, sell, status, rows, out, ready, warmup, position, first, last);
+          return 0; } catch (...) { return -1; }
 }

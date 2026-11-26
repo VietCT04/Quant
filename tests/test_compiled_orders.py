@@ -1,5 +1,6 @@
-﻿"""Causal equivalence of compiled policies, SDK features, and prepared inputs."""
+"""Causal equivalence of compiled policies, SDK features, and prepared inputs."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import numpy as np
@@ -10,6 +11,8 @@ import pytest
 
 import quant as q
 from quant._batch import Candidate
+from quant._order_trial import observed_warmup
+from simulator.reporting import SummaryLogs
 from quant.data import Block, _slice
 from quant.strategy import Runner, prepare
 from simulator.native import OrderSettings, ShockFeatureStream
@@ -47,6 +50,15 @@ def test_fused_feature_prefix_and_block_equivalence():
     for i, key in enumerate(mapping):
         expected = np.concatenate([part.values[key] for part in ref])
         np.testing.assert_allclose(result[i], expected, rtol=1e-8, atol=1e-10)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        stream = ShockFeatureStream(len(block.symbols), flow=True, price_range=True)
+        try:
+            parallel, ready = stream.advance_ready(block, warmup=361, pool=pool, workers=2)
+        finally:
+            stream.close()
+    np.testing.assert_array_equal(parallel, result)
+    expected_ready, _ = observed_warmup(status, price, np.zeros(3, dtype="i8"), 361)
+    np.testing.assert_array_equal(ready, expected_ready)
     values["close"][640:, 0] *= 2
     stream = ShockFeatureStream(len(block.symbols), flow=True, price_range=True)
     try:
@@ -75,8 +87,18 @@ def test_compiled_fills_equal_reference_and_warm_cache(version, market, tmp_path
 
     # Keep staging ledgers in this fixture so row-for-row equality is tested as well as reports.
     monkeypatch.setattr(OrderTrial, "clean", lambda self: None)
+    retained = []
+    append = SummaryLogs.append
+
+    def capture(self, name, rows):
+        if name == "fills" and len(rows):
+            retained.append(rows.copy())
+        return append(self, name, rows)
+
+    monkeypatch.setattr(SummaryLogs, "append", capture)
 
     def run(label):
+        retained.clear()
         strategy = {"id": "shock_inventory_recovery", "version": version}
         resolved = prepare(strategy, {"cadence": 1}, rebalance_ticks=1)
         runner = Runner(resolved, selection.symbols, 37)
@@ -86,7 +108,13 @@ def test_compiled_fills_equal_reference_and_warm_cache(version, market, tmp_path
         result = q.simulator.run_batch(selection, [config], out=tmp_path / label, logging="summary",
                                        workers=1, block_steps=151, cache_directory=cache)
         assert not result.failures, result.failures
-        fills = pl.read_parquet(tmp_path / label / "fixture/.summary-ledger/fills.parquet")
+        if label == "reference":
+            fills = pl.read_parquet(tmp_path / label / "fixture/.summary-ledger/fills.parquet")
+        else:
+            rows = np.concatenate(retained)
+            fills = pl.DataFrame({key: rows[key] for key in rows.dtype.names}).with_columns(
+                pl.selectors.float().fill_nan(None)
+            )
         return result.results["fixture"].report, fills, result.profile
 
     monkeypatch.setenv("QUANT_ORDER_ENGINE", "python")
@@ -98,3 +126,13 @@ def test_compiled_fills_equal_reference_and_warm_cache(version, market, tmp_path
     assert reference == cold == warm
     assert fills.equals(cold_fills) and fills.equals(warm_fills)
     assert profile["cache_hits"] == 1 and profile["signals_worker_seconds"] == 0
+
+    initialize = SummaryLogs.__init__
+
+    def tiny_ledger(self, folder, symbols, limit):
+        initialize(self, folder, symbols, 1)
+
+    monkeypatch.setattr(SummaryLogs, "__init__", tiny_ledger)
+    spilled, spilled_fills, _ = run("spilled")
+    assert reference == spilled and fills.equals(spilled_fills)
+    assert (tmp_path / "spilled/fixture/.summary-ledger/fills.parquet").is_file()

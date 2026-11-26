@@ -9,7 +9,7 @@ import numpy as np
 
 from marketdata.model import DAY
 from simulator.native import _OrderTape
-from simulator.reporting import Logs, order_lifecycles, record
+from simulator.reporting import Logs, SummaryLogs, order_lifecycles, record
 from .explorer_ledger import REASONS
 from .strategy import Portfolio
 
@@ -32,7 +32,7 @@ def observed_warmup(status, close, previous, warm):
 
 
 class OrderTrial:
-    def __init__(self, trial, feed):
+    def __init__(self, trial, feed, *, ledger_limit=0):
         self.trial = trial
         self.start, self.end = feed.trading_start, feed.end
         self.symbols = feed.symbols
@@ -50,7 +50,6 @@ class OrderTrial:
         self.warm_seen = 0
         self.book_clock = None
         self.last_mark_valid = None
-        self.ledger = trial.logs or Logs(trial.directory / ".summary-ledger", self.symbols)
         self.audit = trial.logs is not None
         self.sealed = False
         runner = trial.candidate.decision
@@ -60,6 +59,9 @@ class OrderTrial:
                          and runner.strategy.id == "shock_inventory_recovery"
                          and SHOCK_IMPLEMENTATIONS.get(runner.strategy.version) is not None
                          and SHOCK_IMPLEMENTATIONS[runner.strategy.version] == runner.receipt.get("implementation_hash"))
+        ledger_type = SummaryLogs if ledger_limit and self.compiled else Logs
+        self.ledger = trial.logs or ledger_type(trial.directory / ".summary-ledger", self.symbols,
+                                               *((ledger_limit,) if ledger_type is SummaryLogs else ()))
         if self.compiled:
             trial.engine.configure_shock(runner.parameters, patient=runner.strategy.version == "2.0.0")
 
@@ -240,7 +242,8 @@ class OrderTrial:
             self.ledger.append("positions", positions)
         self.ledger.close(True)
         self.sealed = True
-        positions_summary = order_lifecycles(self.ledger.folder, self.symbols, positions, self.end)
+        positions_summary = (self.ledger.lifecycles(positions, self.end) if isinstance(self.ledger, SummaryLogs)
+                             else order_lifecycles(self.ledger.folder, self.symbols, positions, self.end))
         warnings = {}
         if pre_close["uncertain_positions"]:
             warnings["stale_terminal_marks"] = [
@@ -269,7 +272,7 @@ class OrderTrial:
         return report
 
     def clean(self):
-        if not self.audit:
+        if not self.audit and self.ledger.folder.exists():
             for path in self.ledger.folder.iterdir():
                 if path.is_file() and path.name in {"fills.parquet", "funding.parquet", "fills.part", "funding.part"}:
                     path.unlink()

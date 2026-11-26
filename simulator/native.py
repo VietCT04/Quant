@@ -1,6 +1,8 @@
 """Thin C ABI bindings with no per-bar Python calls."""
 from __future__ import annotations
 
+from concurrent.futures import wait
+
 import ctypes as ct
 import hashlib
 import math
@@ -172,12 +174,15 @@ def _library():
             lib.sim_configure_shock.restype = ct.c_int
             lib.sim_run_program.argtypes = [ptr, ptr, ptr, ptr, ptr, size, ptr, size, ptr, ptr, ct.c_int64, ct.c_int64]
             lib.sim_run_program.restype = ct.c_int
+        if hasattr(lib, "sim_shock_features_run_shard"):
             lib.sim_shock_features_create.argtypes = [size, ct.c_int, ct.c_int]
             lib.sim_shock_features_create.restype = ptr
             lib.sim_shock_features_delete.argtypes = [ptr]
             lib.sim_shock_features_delete.restype = None
-            lib.sim_shock_features_run.argtypes = [ptr, ptr, ptr, ptr, ptr, ptr, size, ptr]
-            lib.sim_shock_features_run.restype = ct.c_int
+            lib.sim_shock_features_run_shard.argtypes = [
+                ptr, ptr, ptr, ptr, ptr, ptr, size, ptr, ptr, size, size, size, size,
+            ]
+            lib.sim_shock_features_run_shard.restype = ct.c_int
         for f in ("orders", "cashflows", "targets", "curve"):
             func = getattr(lib, "sim_" + f)
             func.argtypes, func.restype = [ptr, ct.POINTER(size)], ptr
@@ -393,6 +398,7 @@ class Engine:
 class ShockFeatureStream:
     def __init__(self, symbols, *, flow, price_range):
         self.lib = library()
+        self.position = 0
         self.handle = self.lib.sim_shock_features_create(symbols, flow, price_range)
         if not self.handle:
             raise MemoryError("Native shared feature state could not be allocated")
@@ -403,13 +409,32 @@ class ShockFeatureStream:
             self.handle = None
 
     def advance(self, block):
+        return self.advance_ready(block)[0]
+
+    def advance_ready(self, block, *, warmup=0, pool=None, workers=1):
         arrays = [np.ascontiguousarray(block.values[key], dtype="=f8") for key in
                   ("close", "quote_volume", "buy_quote_volume", "sell_quote_volume")]
-        result = np.empty((11, *block.status.shape), dtype="=f8")
-        if self.lib.sim_shock_features_run(self.handle, *(arr.ctypes.data for arr in arrays),
-                                          block.status.ctypes.data, len(block.status), result.ctypes.data):
+        rows, symbols = block.status.shape
+        result = np.empty((11, rows, symbols), dtype="=f8")
+        ready = np.empty((rows, symbols), dtype=bool)
+        args = (self.handle, *(arr.ctypes.data for arr in arrays), block.status.ctypes.data,
+                rows, result.ctypes.data, ready.ctypes.data, warmup, self.position)
+
+        def run(first, last):
+            return self.lib.sim_shock_features_run_shard(*args, first, last)
+
+        if pool is not None and workers > 1 and rows >= 512:
+            workers = min(workers, symbols)
+            tasks = [pool.submit(run, symbols * i // workers, symbols * (i+1) // workers)
+                     for i in range(workers)]
+            wait(tasks)
+            failures = [task.result() for task in tasks]
+        else:
+            failures = [run(0, symbols)]
+        if any(failures):
             raise RuntimeError("Native shared feature computation failed")
-        return result
+        self.position += rows
+        return result, ready
 
 
 class _OrderTape:

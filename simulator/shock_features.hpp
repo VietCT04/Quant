@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <array>
 #include <deque>
@@ -45,31 +45,34 @@ class ShockFeatures {
         }
     };
     std::vector<SymbolState> state;
-    std::size_t position = 0;
     bool flow, range;
 public:
     ShockFeatures(std::size_t n, bool f, bool r) : state(n), flow(f), range(r) {}
     // Output planes are fast, move, old fast, prior vol, trend, fair, aggression,
     // current volume, prior volume, prior range high, prior range low.
     void evaluate(const double* close, const double* quote, const double* buy, const double* sell,
-                  const unsigned char* status, std::size_t rows, double* out) {
+                  const unsigned char* status, std::size_t rows, double* out, unsigned char* ready,
+                  std::size_t warmup, std::size_t position, std::size_t first, std::size_t last) {
         const auto n = state.size(), plane = n * rows;
         constexpr double alpha = 2./241, weight = 1-alpha;
-        for (std::size_t row = 0; row < rows; ++row, ++position) {
-            auto t = position;
+        for (std::size_t row = 0; row < rows; ++row) {
+            auto t = position + row;
             auto ix = row*n;
             auto k360 = t % 361, k12 = t % 12;
-            for (std::size_t i = 0; i < n; ++i) {
+            auto k12old = (k360 + 361 - 12) % 361;
+            auto k60old = (k360 + 361 - 60) % 361;
+            auto k360old = (k360 + 1) % 361;
+            for (std::size_t i = first; i < last; ++i) {
                 auto& s = state[i];
                 auto offset = ix+i;
                 double price = close[offset];
                 s.run = std::isfinite(price) ? s.run+1 : 0;
-                auto ret = [&](std::size_t period) {
+                auto ret = [&](std::size_t period, std::size_t index) {
                     if (s.run <= period) return unset;
-                    double old = s.price[(t-period)%361];
+                    double old = s.price[index];
                     return old ? price / old - 1 : unset;
                 };
-                double fast = ret(12), move = ret(60), trend = ret(360);
+                double fast = ret(12, k12old), move = ret(60, k60old), trend = ret(360, k360old);
                 s.price[k360] = price;
                 s.ema = std::isfinite(price) && std::isfinite(s.ema) ? alpha*price + weight*s.ema : price;
                 s.vol.update(t, fast, true);
@@ -97,6 +100,7 @@ public:
                     lo = advance(s.low, [](double a, double b) { return a <= b; });
                 }
                 bool valid = status[offset] <= 1;
+                ready[offset] = valid && s.run && s.run >= warmup;
                 out[offset] = valid ? fast : unset;
                 out[plane+offset] = valid ? move : unset;
                 out[2*plane+offset] = valid ? back[0] : unset;

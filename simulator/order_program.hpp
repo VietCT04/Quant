@@ -47,7 +47,10 @@ public:
         const auto* const* cols = c.columns;
         auto col = [&](ShockColumn k, std::size_t i) { return cols[k][c.row * n + i]; };
         double median = unset;
-        if (p.mechanism == 1 || p.mechanism == 3) {
+        bool median_ready = false;
+        auto market_median = [&] {
+            if (median_ready) return median;
+            median_ready = true;
             market_returns.clear();
             for (std::size_t i = 0; i < n; ++i)
                 if (c.status[i] == 0 && c.ready[i] && price_ok(col(Close, i))) market_returns.push_back(col(Move, i));
@@ -58,7 +61,8 @@ public:
                 if (market_returns.size() % 2 == 0)
                     median = (*std::max_element(market_returns.begin(), mid) + median) / 2;
             }
-        }
+            return median;
+        };
 
         double margin = c.available;
         double side = static_cast<double>(p.side);
@@ -81,19 +85,22 @@ public:
             bool new_extreme = held && side * spot < side * s.extreme;
             if (new_extreme) s.extreme = spot;
 
-            double move = col(Move, i), fast = col(Fast, i), fair = col(Fair, i);
+            if (!held && (!c.ready[i] || c.now < s.cooldown)) continue;
+            double move = col(Move, i), fast = col(Fast, i);
             double depth = -side * move;
-            double vol = col(PriorVol, i);
-            double fair_gap = side * (fair / spot - 1);
-            double acceleration = -side * (fast - col(OldFast, i));
-            bool shock = c.ready[i] && depth >= std::max(p.depth, p.sigma * vol * sqrt_five)
-                         && -side * fast >= p.depth * .20;
+            bool shock = c.ready[i] && depth >= p.depth && -side * fast >= p.depth * .20;
+            double vol = shock ? col(PriorVol, i) : unset;
+            shock = shock && depth >= std::max(p.depth, p.sigma * vol * sqrt_five);
+            if (!held && !shock) continue;
+            double fair = col(Fair, i);
+            double fair_gap = shock ? side * (fair / spot - 1) : unset;
+            double acceleration = shock ? -side * (fast - col(OldFast, i)) : unset;
             if (shock && p.mechanism == 0) {
                 shock = acceleration > 0 && fair_gap > .0025;
             } else if (shock) {
                 shock = fair_gap >= p.depth * .5;
-                if (p.mechanism == 1 || p.mechanism == 3) {
-                    double residual = -side * (move - median);
+                if (shock && (p.mechanism == 1 || p.mechanism == 3)) {
+                    double residual = -side * (move - market_median());
                     shock = shock && residual >= std::max(p.depth * .7, vol * sqrt_five * p.sigma)
                             && side * median > -p.market_limit && -side * col(Trend, i) < 3 * depth;
                 }

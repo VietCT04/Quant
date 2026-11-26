@@ -94,7 +94,7 @@ def _validate(candidates):
 
 
 class _Trial:
-    def __init__(self, candidate, feed, rules, out, mode):
+    def __init__(self, candidate, feed, rules, out, mode, *, ledger_limit=0):
         from .simulator import _settings
 
         self.candidate = candidate
@@ -127,7 +127,7 @@ class _Trial:
         self.ordered = None
         if isinstance(config, OrderSettings):
             from ._order_trial import OrderTrial
-            self.ordered = OrderTrial(self, feed)
+            self.ordered = OrderTrial(self, feed, ledger_limit=ledger_limit)
 
     def advance(self, starts, market, status, funding, block):
         if self.ordered is not None:
@@ -426,10 +426,11 @@ def run_batch(
                 trace_bytes = 8 * max((c.trace_width for c in wave), default=0) if logging == "audit" else 0
                 per_cell = (
                     128 + 24 * len(extra_fields) + 32 * len(graph)
-                    + ((80 + 16 * len(extra_fields)) if ordered and worker_limit > 1 else 0)
+                    + ((240 + 48 * len(extra_fields)) if ordered and worker_limit > 1 else 0)
                     + live * ((1024 if logging in {"standard", "audit"} else 48) + 3 * trace_bytes)
                 )
-                persistent = 16384 * len(wave) * n
+                ledger_limit = min(2 << 20, memory_cap // (16 * len(wave))) if ordered and logging == "summary" else 0
+                persistent = (16384 * n + ledger_limit) * len(wave)
                 if memory_cap - persistent >= n * per_cell:
                     break
                 if len(wave) == 1:
@@ -507,7 +508,7 @@ def run_batch(
 
             for c in wave:
                 try:
-                    trials[c.name] = _Trial(c, feed, rules, out, logging)
+                    trials[c.name] = _Trial(c, feed, rules, out, logging, ledger_limit=ledger_limit)
                     keys[c.name] = dict(c.expressions)
                     for name, node in c.expressions.items():
                         period = c.feature_periods.get(name, 1)
@@ -521,10 +522,38 @@ def run_batch(
             clock = perf_counter()
             # Extended fields share the native feed's projected Parquet scan.
             source = iter(prepared(data, feed, cache_directory, caches, profile, cancel, projected=extra_fields))
-            if overlap_reader:
-                source = prefetch(source)
             base = None
             current = None
+            pipeline = None
+
+            def project(data_block, *, native_only=False):
+                starts, market, status = data_block[:3]
+                for arr in (starts, market, status):
+                    arr.flags.writeable = False
+                missing = status > 1 if not native_only else None
+                any_missing = missing is not None and missing.any()
+                values = {}
+                for f, (idx, _) in FIELDS.items():
+                    if native_only and f != "close":
+                        continue
+                    x = market[:, :, idx]
+                    if any_missing:
+                        x = np.where(missing, np.nan, x)
+                    x.flags.writeable = False
+                    values[f] = x
+                if extra_fields:
+                    for name, projection in data_block[3].items():
+                        if any_missing:
+                            projection = np.where(missing, np.nan, projection)
+                        projection.flags.writeable = False
+                        values[name] = projection
+                available = starts + feed.step + feed.lag
+                available.flags.writeable = False
+                return Block(
+                    starts, feed.symbols, available, status, values, feed.step,
+                    {f: (FIELDS[f][1] if f in FIELDS else UNITS[f]) for f in values},
+                    ("prepared_native",),
+                )
 
             def projected():
                 nonlocal base, current, clock
@@ -540,49 +569,44 @@ def run_batch(
                     profile["market_seconds"] += perf_counter() - clock
                     if current is None:
                         return
-                    starts, market, status = current[:3]
-                    for arr in (starts, market, status):
-                        arr.flags.writeable = False
-                    missing = status > 1
-                    any_missing = missing.any()
-                    values = {}
-                    for f, (idx, unit) in FIELDS.items():
-                        x = market[:, :, idx]
-                        if any_missing:
-                            x = np.where(missing, np.nan, x)
-                        x.flags.writeable = False
-                        values[f] = x
-                    if extra_fields:
-                        for name, projection in current[3].items():
-                            if any_missing:
-                                projection = np.where(missing, np.nan, projection)
-                            projection.flags.writeable = False
-                            values[name] = projection
-                    available = starts + feed.step + feed.lag
-                    available.flags.writeable = False
                     clock = perf_counter()
-                    base = Block(
-                        starts,
-                        feed.symbols,
-                        available,
-                        status,
-                        values,
-                        feed.step,
-                        {f: unit for f, (idx, unit) in FIELDS.items()} | {f: UNITS[f] for f in extra_fields},
-                        ("prepared_native",),
-                    )
+                    base = project(current)
                     yield base
+
+            def native_payloads(workers, native_pool):
+                while cancel is None or not cancel.is_set():
+                    started = perf_counter()
+                    data_block = next(source, None)
+                    if data_block is None:
+                        return
+                    start_features = perf_counter()
+                    market_time = start_features - started
+                    block = project(data_block, native_only=True)
+                    planes, ready = fused.advance_ready(block, warmup=warmup, pool=native_pool, workers=workers)
+                    yield (data_block, block, dict(zip(native_planes, planes)), ready,
+                           perf_counter() - start_features, market_time)
+
+            def pipelined(workers):
+                with ThreadPoolExecutor(max_workers=workers) as native_pool:
+                    yield from native_payloads(workers, native_pool)
 
             try:
                 fused = None
                 native_planes = ("fast", "move", "old_fast", "prior_vol", "trend", "fair",
                                  "aggression", "volume_current", "volume_prior", "range_high", "range_low")
                 if (trials and all(trial.ordered is not None and trial.ordered.compiled for trial in trials.values())
+                        and all(hasattr(trial.engine.lib, "sim_shock_features_run_shard") for trial in trials.values())
                         and os.getenv("QUANT_SHOCK_FEATURES") != "python"):
                     fused = ShockFeatureStream(len(feed.symbols),
                                                flow=any("aggression" in k for k in keys.values()),
                                                price_range=any("prior_range_edge" in k for k in keys.values()))
-                if all(c.allocation is not None for c in wave):
+                if fused is None and overlap_reader:
+                    source = prefetch(source)
+                if fused is not None:
+                    pipeline = (prefetch(pipelined(min(8, spare))) if overlap_reader
+                                else native_payloads(worker_limit, pool))
+                    blocks = pipeline
+                elif all(c.allocation is not None for c in wave):
 
                     def static_inputs():
                         nonlocal current, clock
@@ -610,17 +634,24 @@ def run_batch(
                     if biggest * n * (128 + 24 * len(extra_fields)) > memory_cap - persistent:
                         raise MemoryError("Higher timeframe aggregation exceeds the configured memory budget")
                 aligned_features = CompletedFeatures(sampled, feed.step, max(1, memory_cap - persistent), feature_failed)
-                if fused is not None:
-                    from ._order_trial import observed_warmup
-                    run_lengths = np.zeros(len(feed.symbols), dtype="i8")
                 for feature_block in blocks:
-                    higher = aligned_features.advance(base) if aligned_features.groups else {}
-                    native = dict(zip(native_planes, fused.advance(base))) if fused is not None else {}
+                    native = {}
                     readiness = {}
                     if fused is not None:
-                        shared_ready, run_lengths = observed_warmup(
-                            base.status, base.values["close"], run_lengths, warmup
-                        )
+                        if cancel is not None and cancel.is_set():
+                            break
+                        if removed is not None:
+                            for name in trials.keys() & removed():
+                                failures[name] = "cancelled"
+                                trials.pop(name).close()
+                        if not trials:
+                            break
+                        current, base, native, shared_ready, feature_time, market_time = feature_block
+                        profile["feature_seconds"] += feature_time
+                        profile["market_seconds"] += market_time
+                        clock = perf_counter()
+                    higher = aligned_features.advance(base) if aligned_features.groups else {}
+                    if fused is not None:
                         profile["fused_feature_blocks"] += 1
                         masks = {}
                         for name, trial in trials.items():
@@ -750,6 +781,8 @@ def run_batch(
                 results.update(completed)
                 profile["finalization_seconds"] += perf_counter() - tick
             finally:
+                if pipeline is not None:
+                    pipeline.close()
                 if fused is not None:
                     fused.close()
                 source.close()
