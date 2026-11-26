@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from 'react'
-import { Activity, ArrowDownToLine, BookOpen, ChevronRight, CircleAlert, Command, Cpu, FlaskConical, Gauge, Inbox, LayoutGrid, ListOrdered, Pause, Play, Plus, Radio, Waves } from 'lucide-react'
+import { Activity, ArrowDownToLine, BookOpen, ChartCandlestick, ChevronRight, CircleAlert, Command, Cpu, FlaskConical, Gauge, Inbox, LayoutGrid, ListOrdered, Pause, Play, Plus, Radio, Waves } from 'lucide-react'
 import { api, useControl } from './api'
 import { Badge, ErrorBox, Loading, Modal, num } from './components'
 import { InboxRows, Overview } from './Overview'
@@ -7,6 +7,7 @@ import { Queue } from './Queue'
 import type { Operation } from './Results'
 import { Details, Library, Requests, System } from './Views'
 
+const Explorer = lazy(() => import('./Explorer'))
 const Results = lazy(() => import('./Results').then(module => ({ default: module.Results })))
 
 const navigation = [
@@ -14,11 +15,12 @@ const navigation = [
   { id: 'queue', label: 'Hypothesis Queue', icon: ListOrdered, description: 'Prioritize and monitor development experiments.' },
   { id: 'library', label: 'Hypothesis Library', icon: BookOpen, description: 'Registered mechanisms, predictions, and experiment history.' },
   { id: 'results', label: 'Alpha Results', icon: FlaskConical, description: 'Inspect screening evidence and marked portfolio results.' },
+  { id: 'explorer', label: 'Backtest Explorer', icon: ChartCandlestick, description: 'Inspect market prices, simulated executions, and positions.' },
   { id: 'inbox', label: 'Research Inbox', icon: Inbox, description: 'Review durable outcomes and acknowledge the evidence you have seen.' },
   { id: 'requests', label: 'SDK Requests', icon: Command, description: 'Track missing capabilities and engineering review.' },
   { id: 'system', label: 'System', icon: Cpu, description: 'Inspect host telemetry, dispatch limits, and data coverage.' },
 ]
-const pageFromHash = () => navigation.find(item => item.id === location.hash.slice(1))?.id ?? 'overview'
+const pageFromHash = () => navigation.find(item => item.id === location.hash.slice(1).split('?')[0])?.id ?? 'overview'
 type Prompt = { operation: string; ids?: string[]; values?: object }
 
 export default function App() {
@@ -37,7 +39,11 @@ export default function App() {
     setPage(id)
   }, [])
   useEffect(() => {
-    const onHash = () => setPage(pageFromHash())
+    const onHash = () => {
+      const next = pageFromHash()
+      if (next === 'explorer') setSelected('')
+      setPage(next)
+    }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
@@ -119,7 +125,7 @@ export default function App() {
       <a href="#overview" className="brand" onClick={() => navigate('overview')}><span className="brand-mark"><Waves size={23} strokeWidth={2.3} /></span><span><strong>Quant</strong><small>RESEARCH CONTROL</small></span></a>
       <div className="workspace"><span className="workspace-icon"><Activity size={15} /></span><span><strong>Local research</strong><small>Liquid 50 · Development</small></span></div>
       <nav aria-label="Workspace navigation">
-        {navigation.map((entry, index) => <div key={entry.id} className={index === 5 ? 'nav-divider' : undefined}>
+        {navigation.map((entry, index) => <div key={entry.id} className={index === 6 ? 'nav-divider' : undefined}>
           <a href={`#${entry.id}`} className={page === entry.id ? 'active' : ''} aria-label={entry.label} aria-current={page === entry.id ? 'page' : undefined} onClick={() => navigate(entry.id)}>
             <entry.icon size={18} strokeWidth={1.8} /> <span>{entry.label}</span>{entry.id === 'inbox' && unread > 0 && <b>{unread}</b>}
           </a>
@@ -144,7 +150,8 @@ export default function App() {
           {page === 'overview' && <Overview data={data} open={open} navigate={navigate} />}
           {page === 'queue' && <Queue rows={items} open={open} bulk={operate} />}
           {page === 'library' && <Library items={items} open={open} />}
-          {page === 'results' && <Suspense fallback={<Loading />}><Results rows={items} selected={resultId} pick={setResultId} operate={operate} /></Suspense>}
+          {page === 'results' && <Suspense fallback={<Loading />}><Results rows={items} selected={resultId} pick={setResultId} /></Suspense>}
+          {page === 'explorer' && <Suspense fallback={<Loading />}><Explorer rows={items} connected={connected} /></Suspense>}
           {page === 'inbox' && <section className="panel"><header className="panel-heading"><div><h2>Research outcomes</h2><p>{unread} unreviewed</p></div><label className="toggle"><input type="checkbox" checked={showReviewed} onChange={event => setShowReviewed(event.target.checked)} /> Include reviewed</label></header><InboxRows items={items.filter(h => h.revision > 0 && h.finished === h.total && (showReviewed || h.unreviewed)).sort((a, b) => b.revision - a.revision)} open={open} /></section>}
           {page === 'requests' && <Requests requests={data.requests} items={items} open={open} submit={() => showPrompt('request')} />}
           {page === 'system' && <System service={data.service} connected={connected} configure={() => showPrompt('configure')} />}

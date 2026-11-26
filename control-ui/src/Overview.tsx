@@ -1,5 +1,6 @@
 import { Activity, ArrowDownToLine, ArrowRight, CircleCheck, Clock3, Database, Gauge, Inbox, Layers, Radio, TriangleAlert } from 'lucide-react'
 import type { Hypothesis, ResearchEvent, Service, Snapshot } from './api'
+import { explorerLink } from './explorerTypes'
 import { Badge, clock, duration, Empty, gib, num, Progress } from './components'
 
 const captions: Record<string, string> = {
@@ -48,9 +49,9 @@ export function Worker({ service }: { service: Service }) {
 }
 
 export function InboxRows({ items, open }: { items: Hypothesis[]; open: (id: string) => void }) {
-  return items.length ? <div className="compact-list">{items.map(item => <button className="compact-row" key={item.id} onClick={() => open(item.id)}>
+  return items.length ? <div className="compact-list">{items.map(item => <div className="inbox-entry" key={item.id}><button className="compact-row" onClick={() => open(item.id)}>
     <span className="item-icon"><ArrowDownToLine size={15} /></span><span className="item-label"><strong>{item.name}</strong><small>{item.id} · {item.finished} trials {item.errors.length ? 'with errors' : 'recorded'}</small></span><Badge value={item.state} /><ChevronRightIcon />
-  </button>)}</div> : <Empty title="Inbox is clear">Completed or changed results will appear here.</Empty>
+  </button>{item.state === 'completed' && item.stage !== 'screening' && <a className="text-button inbox-explorer" href={explorerLink(item.id)} aria-label={`Explore ${item.id}`}>Explore</a>}</div>)}</div> : <Empty title="Inbox is clear">Completed or changed results will appear here.</Empty>
 }
 
 function ChevronRightIcon() { return <ArrowRight size={15} className="muted" /> }

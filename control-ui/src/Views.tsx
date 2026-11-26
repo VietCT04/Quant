@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ArrowRight, BookOpen, Cpu, Database, HardDrive, MemoryStick, Radio } from 'lucide-react'
 import { useResource, type Capability, type Detail, type Hypothesis, type Service } from './api'
 import { Badge, between, duration, Empty, ErrorBox, gib, Json, Loading, num, pct, Progress } from './components'
+import { explorerLink } from './explorerTypes'
 import { Worker } from './Overview'
 import type { Operation } from './Results'
 
@@ -11,14 +12,15 @@ export function Details({ item, operate, showResults }: { item: Hypothesis; oper
   if (resource.error) return <ErrorBox>{resource.error}</ErrorBox>
   const value = resource.value!
   const trials = value.experiments ?? []
+  const native = trials.find(trial => trial.kind !== 'screen' && trial.status === 'completed')
   const active = item.state === 'running' || item.state === 'queued' || (item.state === 'blocked' && item.finished < item.total)
   return <>
     <div className="detail-meta"><Badge value={item.state} /><span className="mono">{item.id}</span><span>{item.family}</span><span className="stage">{item.stage}</span></div>
     <div className="detail-timing"><div><span>Queued time{item.first_started ? ' before first attempt' : ''}</span><strong>{between(item.created, item.first_started || (item.finished === item.total ? item.last_result : null))}</strong></div>
-      <div><span>Execution time</span><strong>{item.first_started ? duration(item.execution_seconds + (item.active_attempt ? Math.max(0, Date.now() - Date.parse(item.timing_sampled_at)) / 1000 : 0)) : "?"}</strong></div>
+      <div><span>Execution time</span><strong>{item.first_started ? duration(item.execution_seconds + (item.active_attempt ? Math.max(0, Date.now() - Date.parse(item.timing_sampled_at)) / 1000 : 0)) : "—"}</strong></div>
       <div><span>Total elapsed</span><strong>{between(item.created, item.finished === item.total ? item.last_result : null)}</strong></div></div>
     {item.cancelling > 0 && <p className="muted">{item.cancelling} running trials are awaiting cancellation.</p>}
-    <div className="detail-actions"><button onClick={showResults}>View results <ArrowRight size={14} /></button><button onClick={() => operate('priority', [item.id])}>Priority {item.priority}</button>
+    <div className="detail-actions"><button onClick={showResults}>View results <ArrowRight size={14} /></button>{native && <a className="text-button" href={explorerLink(item.id, native.id)}>Backtest Explorer <ArrowRight size={14} /></a>}<button onClick={() => operate('priority', [item.id])}>Priority {item.priority}</button>
       {active && <button className="danger" onClick={() => operate('cancel', [item.id])}>Cancel work</button>}
       {(['failed', 'cancelled'].includes(item.state) || (item.state === 'blocked' && item.finished === item.total)) && <button onClick={() => operate('retry', [item.id])}>Retry failed trials</button>}
       {item.unreviewed && <button onClick={() => operate('acknowledge', [item.id], { revision: item.revision })}>Acknowledge</button>}
@@ -39,6 +41,7 @@ export function Details({ item, operate, showResults }: { item: Hypothesis; oper
     <div className="detail-section"><div className="detail-section-head"><h3>Experiment history</h3><Progress item={item} /></div>
       {trials.map((trial, i) => <details className="trial" key={trial.id}><summary><span className="mono">{i + 1}. {trial.id.slice(0, 10)}</span> <span>{trial.kind}</span><Badge value={trial.status} /></summary>
         <Json value={{ ...trial.specification, attempts: trial.attempts, failure: trial.outcome?.failure }} />
+        {trial.kind !== 'screen' && trial.status === 'completed' && <a href={explorerLink(item.id, trial.id)}>Explore candidate</a>}
         {trial.artifact_urls.map((url, index) => <a key={url} href={url} download>Download artifact {index + 1}</a>)}
       </details>)}
     </div>

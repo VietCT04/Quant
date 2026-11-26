@@ -263,3 +263,7 @@ summary { color: #bac8dc; padding: 5px 0; font-size: 12px; }
 .progress-blocked progress::-moz-progress-bar { background: var(--amber); }
 .progress-cancelled progress::-webkit-progress-value { background: var(--dim); }
 .progress-cancelled progress::-moz-progress-bar { background: var(--dim); }
+.inbox-entry { display: flex; align-items: center; border-bottom: 1px solid var(--border-soft); }
+.inbox-entry:last-child { border-bottom: 0; }
+.inbox-entry > button { flex: 1; min-width: 0; }
+.inbox-entry .inbox-explorer { margin-right: 15px; color: var(--mint); }

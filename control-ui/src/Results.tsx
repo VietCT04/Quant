@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, ArrowUpRight, FileDown, FlaskConical } from 'lucide-react'
 import { useResource, type Detail, type Hypothesis, type Trial } from './api'
+import { explorerLink } from './explorerTypes'
 import { Badge, Empty, ErrorBox, Json, Loading, num, pct } from './components'
 
 export type Operation = (operation: string, ids: string[], values?: object) => void
@@ -90,7 +91,7 @@ function Comparison({ trials, screen }: { trials: Trial[]; screen: boolean }) {
   </tbody></table></div>
 }
 
-export function Results({ rows, selected, pick, operate }: { rows: Hypothesis[]; selected: string; pick: (id: string) => void; operate: Operation }) {
+export function Results({ rows, selected, pick }: { rows: Hypothesis[]; selected: string; pick: (id: string) => void }) {
   const [mode, setMode] = useState<'screen' | 'native'>('screen')
   const [primary, setPrimary] = useState('')
   const [secondary, setSecondary] = useState('')
@@ -112,7 +113,7 @@ export function Results({ rows, selected, pick, operate }: { rows: Hypothesis[];
     </section>
     {result?.error ? <ErrorBox>{result.error}</ErrorBox> : !result ? <Loading /> : !picks.length ?
       <section className="panel"><Empty title={mode === 'screen' ? 'No completed screening trials' : 'No completed native trials'}>{sameMode.length ? `${sameMode.length} trials registered. See the hypothesis for execution history.` : 'Select a hypothesis with this evaluation type.'}</Empty></section> : <>
-      <section className="panel"><header className="panel-heading"><div><h2>{mode === 'screen' ? 'Descriptive diagnostics' : 'Net portfolio results'}</h2><p>{completed.length} completed of {sameMode.length} registered trials</p></div>{mode === 'native' && <button onClick={() => operate('audit', [id], { experiment_id: first.id })}><ArrowUpRight size={15} /> Audit replay</button>}</header>
+      <section className="panel"><header className="panel-heading"><div><h2>{mode === 'screen' ? 'Descriptive diagnostics' : 'Net portfolio results'}</h2><p>{completed.length} completed of {sameMode.length} registered trials</p></div>{mode === 'native' && <a className="text-button" href={explorerLink(id, first.id)}>Open Backtest Explorer <ArrowUpRight size={15} /></a>}</header>
         <div className="comparison-selectors">
           <label>Candidate 1<select aria-label="Candidate 1" value={first.id} onChange={event => { setPrimary(event.target.value); setSecondary('') }}>{completed.map(trial => <option key={trial.id} value={trial.id}>{trial.id.slice(0, 8)} · {paramName(trial)}</option>)}</select></label>
           <label>Compare with<select aria-label="Compare with" value={second?.id ?? ''} onChange={event => setSecondary(event.target.value)}><option value="">{compatible.length ? 'Select comparable candidate' : 'No comparable candidates'}</option>{compatible.map(trial => <option key={trial.id} value={trial.id}>{trial.id.slice(0, 8)} · {paramName(trial)}</option>)}</select></label>
@@ -128,6 +129,7 @@ export function Results({ rows, selected, pick, operate }: { rows: Hypothesis[];
             {robustness != null && <details open><summary>Recorded subperiod results</summary><Json value={robustness} /></details>}
             {mode === 'native' && <details open><summary>Cost and risk assumptions</summary><Json value={{ ...trial.specification.costs, ...record(trial.specification.parameters.settings) }} /></details>}
             <details><summary>Full metrics and warnings</summary><Json value={{ metrics, warnings: trial.outcome?.warnings }} /></details>
+            {mode === 'native' && <a className="text-button" href={explorerLink(id, trial.id)}>Explore candidate <ArrowUpRight size={15} /></a>}
             {trial.artifact_urls.map((url, i) => <a href={url} key={url} download className="text-button"><FileDown size={15} /> Download artifact {i + 1}</a>)}
           </div>
         </section>
