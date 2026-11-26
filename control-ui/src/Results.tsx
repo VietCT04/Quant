@@ -140,5 +140,7 @@ export function Results({ rows, selected, pick }: { rows: Hypothesis[]; selected
 
 function paramName(trial: Trial) {
   const p = trial.specification.parameters
+  const strategy = trial.specification.strategy
+  if (strategy) return `${strategy.id} @ ${strategy.version}`
   return p.fast != null ? `EMA ${p.fast}/${p.slow}${record(p.settings).fee_bps != null ? `, fee ${record(p.settings).fee_bps} bps` : ''}` : 'Causal expression pair'
 }

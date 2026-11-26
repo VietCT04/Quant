@@ -30,7 +30,7 @@ export type Campaign = { id: string; name: string; created: string }
 export type Snapshot = { cursor: number; hypotheses: Hypothesis[]; events: ResearchEvent[]; service: Service; requests: Capability[]; campaigns: Campaign[]; coverage: Coverage | null }
 export type Trial = {
   id: string; kind: string; status: State; artifact_urls: string[]
-  specification: { parameters: Record<string, unknown>; evaluation: Record<string, unknown>; costs: Record<string, unknown>; seed: number; start_ms: number; end_ms: number; universe: string[]; dataset_fingerprint: string; git: { commit: string; dirty: boolean } }
+  specification: { strategy?: { id: string; version: string; implementation_hash: string }; parameters: Record<string, unknown>; evaluation: Record<string, unknown>; costs: Record<string, unknown>; seed: number; start_ms: number; end_ms: number; universe: string[]; dataset_fingerprint: string; git: { commit: string; dirty: boolean } }
   attempts: { attempt: number; started: string; ended: string | null; failure: { type: string; message?: string } | null }[]
   outcome: { metrics: Record<string, unknown>; failure: { type: string; message?: string } | null; warnings: string[] } | null
 }

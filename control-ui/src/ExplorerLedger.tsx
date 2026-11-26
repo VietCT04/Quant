@@ -1,4 +1,4 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ChevronLeft, ChevronRight, List } from 'lucide-react'
 import { useResource } from './api'
 import { Badge, duration, Empty, ErrorBox, Loading, num, pct } from './components'
@@ -50,6 +50,7 @@ export function ExecutionCard({ event, symbol, clear }: { event: Execution; symb
     ['Spread / slippage / impact · USDT', event.slippage], ['Resulting signed quantity', event.after],
     ['Average entry price', event.entry], ['Gross realized P&L · USDT', event.realized],
     ['Settlement mark', event.mark], ['Funding cash flow', event.payment],
+    ['Strategy rationale', event.decision_rationale],
     ['Execution reason', event.reason_label != null ? `${event.reason}: ${event.reason_label}` : undefined],
   ]
   return <section className="panel selection-card" aria-label="Execution detail"><header className="panel-heading">

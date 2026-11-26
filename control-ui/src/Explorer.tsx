@@ -49,7 +49,7 @@ export default function Explorer({ rows, connected }: { rows: Hypothesis[]; conn
       {hypotheses.map(row => <option value={row.id} key={row.id}>{row.id} · {row.name}</option>)}</select></label>
       <label>Native candidate<select aria-label="Explorer candidate" value={job ?? ''} disabled={!candidates.length}
         onChange={event => set({ hypothesis: selected, candidate: event.target.value }, true)}><option value="" disabled>Select a candidate</option>
-        {candidates.map(item => <option value={item.id} key={item.id}>{item.id.slice(0, 10)} · {item.kind}{item.specification.parameters.fast != null ? ` · EMA ${item.specification.parameters.fast}/${item.specification.parameters.slow}` : ''}</option>)}</select></label>
+        {candidates.map(item => <option value={item.id} key={item.id}>{item.id.slice(0, 10)} · {item.kind}{item.specification.strategy ? ` · ${item.specification.strategy.id} @ ${item.specification.strategy.version}` : item.specification.parameters.fast != null ? ` · EMA ${item.specification.parameters.fast}/${item.specification.parameters.slow}` : ''}</option>)}</select></label>
       {job && <span className="mono candidate-ref">{job}</span>}
     </section>
     {!selected ? <section className="panel"><Empty title="No backtests to explore">Completed native candidates appear here.</Empty></section>
@@ -112,7 +112,7 @@ function Workspace({ base, meta, route, set }: { base: string; meta: Meta; route
   const revision = meta.detailed_job
   const query = params({ symbol, tf, start: fetched.start, end: fetched.end })
   const candleResult = useResource<Candles>(`${base}/candles?${query}`)
-  const featureResult = useResource<Features>(`${base}/features?${query}`)
+  const featureResult = useResource<Features>(!meta.strategy || revision ? `${base}/features?${query}` : null, revision)
   const timeSeries = useResource<Series>(revision ? `${base}/series?${query}` : null, revision)
   const markerQuery = params({ symbol, start: fetched.start, end: Math.min(fetched.end + 1000, meta.end + 1000), limit: 500 })
   const fills = useResource<Page<Execution>>(revision ? `${base}/fills?${markerQuery}` : null, revision)
