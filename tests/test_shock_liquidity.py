@@ -6,7 +6,9 @@ import pytest
 from quant.trading import Orders
 from quant.strategy import Portfolio
 from research_strategies import shock_liquidity as strategy
+from research_strategies import shock_liquidity_allocated as allocated
 from research_strategies import shock_liquidity_context as context
+from research_strategies import shock_liquidity_extension as extension
 
 
 @pytest.mark.parametrize("side", [1, -1])
@@ -63,3 +65,41 @@ def test_context_filters_only_entry_readiness(monkeypatch):
 
     monkeypatch.setattr(strategy, "trade", decisions)
     context.trade((params,), row, account, None)
+
+
+def test_allocated_budget_compounds_using_booked_equity(monkeypatch):
+    params = {key: rule.default for key, rule in allocated.STRATEGY.parameters.items()}
+    state = allocated.initialize(params, ("A",), None)
+    other = allocated.initialize(params, ("A",), None)
+    row = SimpleNamespace(symbols=("A",))
+
+    def decisions(local, observed, portfolio, orders):
+        assert local[0]["order_usdt"] == .04 * portfolio.equity
+        assert local[0]["inventory"] == .12 * portfolio.equity
+        return {}
+
+    monkeypatch.setattr(strategy, "trade", decisions)
+    account = Portfolio(5_000, np.zeros(1), 10_000.)
+    assert allocated.trade(state, row, account, None)["leg_budget"].item() == 400.
+    account = Portfolio(10_000, np.zeros(1), 12_500.)
+    assert allocated.trade(state, row, account, None)["leg_budget"].item() == 500.
+    assert "order_usdt" not in other[0] and "order_usdt" not in params
+
+
+def test_extension_reduces_once_then_closes_on_trailing_reversal(monkeypatch):
+    params = {key: rule.default for key, rule in extension.STRATEGY.parameters.items()}
+    state = extension.initialize(params, ("A",), None)
+    state[0][1][0] = 100.
+    positions = {"qty": np.array([3.]), "entry": np.array([96.])}
+    monkeypatch.setattr(allocated, "trade", lambda state, row, account, orders: orders.close("A") or {})
+
+    def decision(price, clock):
+        orders = Orders(("A",))
+        row = SimpleNamespace(symbols=("A",), status=np.array([[0]]), values={"close": np.array([[price]])})
+        extension.trade(state, row, Portfolio(clock, positions, 10_000.), orders)
+        return [(item.kind, item.size) for item in orders.items]
+
+    assert decision(100., 5_000) == [(3, .35)]
+    positions["qty"][0] = 1.95
+    assert decision(104., 10_000) == []
+    assert decision(100., 15_000) == [(2, 0.)]

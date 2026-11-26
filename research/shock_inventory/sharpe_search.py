@@ -15,6 +15,9 @@ FULL = ("2024-11-25", "2026-11-25")
 STRATEGY = {"id": "shock_inventory_recovery", "version": "2.0.0"}
 LIQUIDITY = {"id": "shock_liquidity_recovery", "version": "1.0.0"}
 CONTEXT = LIQUIDITY | {"version": "2.0.0"}
+ALLOCATED = LIQUIDITY | {"version": "3.0.0"}
+EXTENDED = LIQUIDITY | {"version": "4.0.0"}
+ROI_SCREEN_GATE = 4 ** .25 - 1
 COMMON = dict(cadence=24, order_usdt=10, depth=.024, minimum_gap=.016,
               patient_minutes=18, hold_minutes=720, step=.004, retrace=.50, stop=2.5)
 FAMILIES = {
@@ -102,18 +105,55 @@ def tail_candidates():
         yield name, prediction, baseline | values, STRATEGY, None
 
 
-def promoted_candidates(port, ids, screening_selection):
+def allocated_candidates():
+    baseline = dict(market="systemic", side=1, cadence=48)
+    mechanism = "Deploy equity-proportional inventory during forced selling and keep a larger share of the recovery."
+    profiles = [
+        ("Screen winner / 2% legs", dict(leg_fraction=.02, inventory_fraction=.12)),
+        ("Screen winner / 8% legs", dict(leg_fraction=.08, inventory_fraction=.20)),
+        ("Broad shallow shock / recovery extension", dict(depth=.016, gap=.022, prior_alignment=-.02,
+                                                            leg_fraction=.05, inventory_fraction=.18,
+                                                            hold=2880, recovery=.82, step=.007)),
+        ("Broad regular shock / delayed reduction", dict(depth=.022, gap=.026, leg_fraction=.08,
+                                                          inventory_fraction=.24, hold=2880, recovery=.85)),
+        ("Broad dislocation / reduced cash drag", dict(depth=.017, gap=.018, prior_alignment=-.025,
+                                                       leg_fraction=.10, inventory_fraction=.25,
+                                                       hold=1440, recovery=.65, stop=3.0)),
+        ("Isolated markdown / larger exposure", dict(market="isolated", depth=.04, gap=.04, turnover=650,
+                                                     leg_fraction=.06, inventory_fraction=.24, recovery=.75, hold=2880)),
+    ]
+    for name, values in profiles:
+        yield name, mechanism, baseline | values, ALLOCATED, None
+
+
+def extension_candidates():
+    baseline = dict(market="systemic", side=1, cadence=60, recovery=.85, hold=2880,
+                    leg_fraction=.08, inventory_fraction=.24, release_fraction=.30)
+    prediction = "A systemic recovery can continue past the pre-shock price after forced selling dissipates."
+    for name, changes in [
+        ("Systemic / 72-hour extension", dict(depth=.022, gap=.024)),
+        ("Systemic / week-long extension", dict(depth=.017, gap=.019, prior_alignment=-.02,
+                                                 extension_hours=168, extension_trail=.055, leg_fraction=.10)),
+        ("Isolated / retain upside tail", dict(market="isolated", depth=.04, gap=.04, turnover=650,
+                                              extension_hours=120, extension_trail=.045)),
+    ]:
+        yield name, prediction, baseline | changes, EXTENDED, None
+
+
+def promoted_candidates(port, ids, screening_selection, *, roi=False):
     fingerprint = q.data.fingerprint(screening_selection)
     for hypothesis in ids:
         for trial in request(port, f"/hypotheses/{hypothesis}/results")["experiments"]:
             if trial["status"] != "completed":
                 continue
             metrics = trial["outcome"].get("metrics", {})
-            if (metrics.get("sharpe") or 0) < 2 or (metrics.get("roi") or 0) <= 0:
+            minimum_roi = ROI_SCREEN_GATE if roi else 0
+            if ((metrics.get("roi") or 0) < minimum_roi if roi else
+                    (metrics.get("roi") or 0) <= 0 or (metrics.get("sharpe") or 0) < 2):
                 continue
             spec = trial["specification"]
             strategy = {key: spec["strategy"][key] for key in ("id", "version")}
-            if (strategy not in (STRATEGY, LIQUIDITY, CONTEXT) or spec["seed"] != 716 or spec["costs"]
+            if (strategy not in (STRATEGY, LIQUIDITY, CONTEXT, ALLOCATED, EXTENDED) or spec["seed"] != 716 or spec["costs"]
                     or (spec["start_ms"], spec["end_ms"]) != (screening_selection.start, screening_selection.end)
                     or tuple(spec["universe"]) != screening_selection.symbols
                     or spec["dataset_fingerprint"] != fingerprint):
@@ -126,34 +166,43 @@ def promoted_candidates(port, ids, screening_selection):
                    spec["parameters"], strategy, trial["id"])
 
 
-def submit(port, output, promotion=(), *, liquidity=False, followup=False, context=False, tail=False):
+def submit(port, output, promotion=(), *, liquidity=False, followup=False, context=False,
+           tail=False, roi=False, extension=False):
+    roi = roi or extension
     dates = FULL if promotion else SCREEN
     source = request(port, "/service")["coverage"]["source"]
     dataset = q.data.open(source)
     selection = q.data.select(dataset, start=dates[0], end=dates[1])
     protocol = dict(start=selection.start, end=selection.end, universe=selection.symbols,
                     dataset_fingerprint=q.data.fingerprint(selection), seed=716, costs={})
-    candidates = (promoted_candidates(port, promotion, q.data.select(dataset, start=SCREEN[0], end=SCREEN[1])) if promotion else
+    candidates = (promoted_candidates(port, promotion, q.data.select(dataset, start=SCREEN[0], end=SCREEN[1]), roi=roi)
+                  if promotion else extension_candidates() if extension else allocated_candidates() if roi else
                   liquidity_candidates() if liquidity else
                   context_candidates() if context else
                   tail_candidates() if tail else
                   followup_candidates() if followup else screening_candidates())
+    gate = ({"two_year_net_roi_target": 3.0, "screening_net_roi_hurdle": ROI_SCREEN_GATE} if roi else
+            {"promotion_minimum_net_sharpe": 2.0, "promotion_requires_positive_roi": True})
+    definition = ("Accumulate equity-proportional inventory during a causal adverse shock and distribute into recovery."
+                  if roi else "Use 10 USDT orders with causal adverse additions and recovery reductions.")
     hypotheses = [
         dict(name=name, family="Shock inventory", stage="simulation", mechanism=prediction, prediction=prediction,
-             definition="Use 10 USDT orders on the patient shock inventory policy with causal adverse additions and recovery reductions.",
+             definition=definition,
              protocol=protocol | {"evaluation": {
                  "research_window": "full_history" if promotion else "six_month",
-                 "origin_job": origin, "promotion_minimum_net_sharpe": 2.0, "promotion_requires_positive_roi": True,
+                 "origin_job": origin, **gate,
              }}, candidates=[{"kind": "native", "strategy": strategy, "parameters": parameters}])
         for name, prediction, parameters, strategy, origin in candidates
     ]
     if not hypotheses:
         raise ValueError("No completed candidate meets the recorded promotion gate")
-    stage = ("full archive" if promotion else "frozen reference round" if liquidity else
+    stage = ("full archive" if promotion else "recovery follow-through" if extension else
+             "equity-proportional inventory" if roi else
+             "frozen reference round" if liquidity else
              "directional context round" if context else
              "inventory depth round" if tail else
              "isolated displacement follow-up" if followup else "wide displacement round")
-    envelope = {"campaign": "Shock / Sharpe 2 / " + stage,
+    envelope = {"campaign": ("Shock / ROI 300 / " if roi else "Shock / Sharpe 2 / ") + stage,
                 "hypotheses": hypotheses}
     output.mkdir(parents=True, exist_ok=False)
     (output / "spec.json").write_text(json.dumps(envelope, indent=2), encoding="utf8")
@@ -169,13 +218,17 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--promote", nargs="+", default=[])
+    mode.add_argument("--promote-roi", nargs="+", default=[])
+    mode.add_argument("--roi", action="store_true")
+    mode.add_argument("--extension", action="store_true")
     mode.add_argument("--liquidity", action="store_true")
     mode.add_argument("--followup", action="store_true")
     mode.add_argument("--context", action="store_true")
     mode.add_argument("--tail", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(submit(args.port, args.out, args.promote, liquidity=args.liquidity,
-                            followup=args.followup, context=args.context, tail=args.tail)), flush=True)
+    print(json.dumps(submit(args.port, args.out, args.promote or args.promote_roi,
+                            liquidity=args.liquidity, followup=args.followup, context=args.context,
+                            tail=args.tail, roi=args.roi or bool(args.promote_roi), extension=args.extension)), flush=True)
 
 
 if __name__ == "__main__":
