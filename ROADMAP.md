@@ -95,7 +95,7 @@ Data coverage, manifests and tests remain the evidence for these baselines. Simu
 
 | Finding | Current behavior and readiness implication |
 |---|---|
-| Publishing and merge history | `AGENTS.md` describes reviewable branches and says Simulator V1 was merged in PR #1. Commit `7f05e72` reached `main` by a direct fast-forward push at the owner's request, and GitHub then marked PR #1 merged. The owner's later direct-to-`main`, no-PR instruction supersedes the default branch guidance for this repository. |
+| Publishing and merge history | `AGENTS.md` records the owner's direct-to-`main` workflow. Simulator V1 commit `7f05e72` reached `main` by direct fast-forward push, and GitHub then marked PR #1 merged. |
 | SDK namespace and catalog | `quant` wraps the existing Arrow and native interfaces. The command-line catalog is generated from the implemented inventory. |
 | Gap and warm-up policy | SDK EMA defaults to resetting on gaps. The V1 EMA declares its legacy carry mode and shares the SDK recurrence. Native execution retains its eligibility checks. |
 | Holdout and signal provenance | Ordinary SDK research methods reject the reserved window. The explicit release path checks provenance and persists an audit receipt. Arbitrary raw arrays still rely on caller provenance. |

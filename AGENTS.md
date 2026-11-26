@@ -51,7 +51,7 @@ For each task:
 7. Update documentation, examples, schemas, registry metadata and changelog where applicable. Never document planned capabilities as implemented.
 8. Report what changed, exact test and benchmark results, commands to reproduce, artifacts, limitations, and any unfinished work. Do not claim completion without evidence.
 
-Use `uv sync --locked` and `uv run pytest -q` where applicable; inspect current project tooling for other commands. Preserve Windows and Linux compatibility. Use the existing C++20 toolchain and C ABI unless a measured reason justifies changing them. Do not commit credentials, local datasets, generated caches or bulky logs. Do not reset, force-push, merge, or publish changes unless authorized by the user; use reviewable branches when publishing is requested.
+Use `uv sync --locked` and `uv run pytest -q` where applicable; inspect current project tooling for other commands. Preserve Windows and Linux compatibility. Use the existing C++20 toolchain and C ABI unless a measured reason justifies changing them. Do not commit credentials, local datasets, generated caches or bulky logs. Publish authorized changes in focused commits directly to `main` using fast-forward pushes. Open a pull request only when the owner explicitly requests one. Resets, force-pushes, and merge commits require separate owner authorization.
 
 ## 5. SDK design contract
 
