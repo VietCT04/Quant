@@ -171,3 +171,10 @@ See the [SDK guide](docs/SDK.md), [data contract](docs/DATA_CONTRACT.md), [causa
 ## 13. Research execution
 
 Submit predeclared development experiments through `q.research.submit`. A trusted local handler uses `verify_selection` to bind its source data and returns outcomes by experiment ID. Share causal expressions via `q.evaluate.screen` or `q.simulator.run_batch`, and use a prepared cache only when the disk reservation fits. Screen results are descriptive. Replay selected experiments in audit mode for full accounting artifacts. Keep callback state private and use frozen replay tokens for committed waves. Review the [Phase 4 execution guide](docs/RESEARCH_ENGINE.md) for resource limits, cancellation, and audit procedures.
+
+
+## 14. Research Control Center
+
+Phase 4.5 adds the [local Research Control Center](docs/CONTROL_CENTER.md) for asynchronous development submissions, execution, and outcome review. Start the full application with `uv run quant service start --build-ui` on the first build and `uv run quant service start` thereafter. CLI and browser submissions share the experiment registry. Use the returned hypothesis IDs and pick up changed outcomes with `uv run quant research inbox --unreviewed`. Acknowledge the result revision after reviewing it. Execution states remain separate from research verdicts.
+
+The service uses trusted data-only handlers and the existing development selection, resource budgets, and block-major execution. Keep application changes local to this phase. Phase 5 discovery, final evaluation release, and live execution require separate owner authorization.

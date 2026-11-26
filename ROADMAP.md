@@ -47,6 +47,14 @@ Data coverage, manifests and tests remain the evidence for these baselines. Simu
 - Feature requests can be tracked without blocking independent experiments. Record the specification, data and causality requirements, acceptance examples, status, implementation version and reviewer findings.
 - Researcher, library engineer and reviewer responsibilities have explicit boundaries. Candidate code cannot silently replace trusted eligibility, execution, accounting, risk, cost or evaluation rules.
 
+## Phase 4.5 · Research Control Center
+
+**Delivered.** The detached local service adds atomic hypothesis and campaign submission, durable outcome review, live queue management, audit replay, and one resumable browser event stream. It uses the existing SQLite experiment registry and native execution. The React workstation includes the overview, queue, library, results, inbox, SDK requests, and system views.
+
+**Verification.** The development acceptance campaign completed 100 screening trials and eight native trials after process termination and restart. One additional audit replay matched the original native accounting metrics. The [control center guide](docs/CONTROL_CENTER.md) records reproduction commands and links to production browser screenshots.
+
+**Boundary.** Research specifications are predeclared and run only on development selections. Phase 5 automation remains owner-authorized.
+
 ## Phase 5 · Authorized automated alpha discovery
 
 **Dependencies.** Explicit owner authorization, verified scheduler and resource limits, an accepted capability and experiment registry, and tested chronological evaluation boundaries.

@@ -2,6 +2,8 @@
 
 Phase 4 extends the existing SDK and native engine. Parquet and its audited metadata define market data. Research jobs use development dates and the same portfolio accounting, execution rules, risk limits, trade coverage, mark availability and funding as individual simulations.
 
+The [Research Control Center](CONTROL_CENTER.md) runs this scheduler as a detached local service. It adds hypothesis and campaign records, a live workstation, and a durable inbox to the same registry. The commands below cover the original direct execution path.
+
 ## Run the acceptance campaign
 
 ```bash

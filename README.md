@@ -2,6 +2,8 @@
 
 ## Quant research SDK
 
+Start the [local Research Control Center](docs/CONTROL_CENTER.md) with `uv run quant service start --build-ui`. The service accepts development hypotheses asynchronously, executes independently of the submitting session, and records results in a durable inbox.
+
 Use the [research execution guide](docs/RESEARCH_ENGINE.md) to run deterministic Phase 4 campaigns, share immutable market data, and replay registered experiments with full audit logs. See the [Phase 4 benchmarks](docs/RESEARCH_BENCHMARKS.md) for measured throughput.
 
 `quant` wraps the audited Liquid 50 dataset and the existing portfolio simulator with aligned causal features, forward-label diagnostics, experiment tracking and capability discovery.
