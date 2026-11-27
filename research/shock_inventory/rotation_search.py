@@ -25,6 +25,10 @@ PAIR_BREAKOUT = {"id": "economic_peer_spread_breakout", "version": "1.0.0"}
 BREADTH_REBOUND = {"id": "market_breadth_rebound", "version": "1.0.0"}
 COMPRESSION = {"id": "quiet_range_breakout", "version": "1.0.0"}
 COMPRESSION_CONTEXT = {"id": "quiet_range_breakout", "version": "1.1.0"}
+COMPRESSION_CAPACITY = {"id": "quiet_range_breakout", "version": "1.2.0"}
+FAILED_RELIEF = {"id": "failed_countertrend_relief", "version": "1.0.0"}
+DEFENSIVE_ROTATION = {"id": "defensive_demand_rotation", "version": "1.0.0"}
+SHOCK_STRESS = {"id": "shock_repricing_breakout", "version": "8.3.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
     ("Relative momentum, more peers", dict(hold=36, enter=.79, keep=.55, slots=8, fraction=.075)),
@@ -134,6 +138,44 @@ CONTEXT_BREAKOUT_CANDIDATES = [
     ("Compression respite, moderate market floor", dict(ratio=.82, activity=1.20, fraction=.055, slots=12,
                                                           participation=.47, market_floor=-.012, hold=42)),
 ]
+CAPACITY_BREAKOUT_CANDIDATES = [
+    ("Compression, completed-bar cap 10%", dict(ratio=.83, activity=1.22, participation_cap=.10, slots=12)),
+    ("Compression, completed-bar cap 20%", dict(ratio=.83, activity=1.22, participation_cap=.20, slots=12)),
+    ("Compression, completed-bar cap 35%", dict(ratio=.83, activity=1.22, participation_cap=.35, slots=12)),
+    ("Compression, lower volatility risk", dict(ratio=.85, activity=1.18, participation_cap=.22, vol_target=.009,
+                                               slots=13, fraction=.07, min_quote=1_000_000.)),
+    ("Compression, cap with less chasing", dict(ratio=.80, activity=1.25, participation_cap=.20, chase=.024,
+                                                min_quote=2_000_000., slots=12)),
+]
+RELIEF_CANDIDATES = [
+    ("Failed relief, resumption of downtrend", {}),
+    ("Failed relief, stronger market stress", dict(market=.026, trend=.065, hold=24)),
+    ("Failed relief, broader downtrends", dict(trend=.033, market=.005, relief_min=.012, turn_min=.003, hold=24)),
+    ("Failed relief, fast risk reduction", dict(trend=.042, stop=.022, hold=12, take=.040, liquidity=3_000_000.)),
+    ("Failed relief, deeper countertrend traps", dict(relief_min=.030, turn_min=.007, hold=32)),
+    ("Failed relief, pullback ends in uptrend", dict(side=1)),
+    ("Failed relief, broader long-side trend resumption", dict(side=1, trend=.036, market=.006, relief_min=.012,
+                                                                turn_min=.003, hold=28)),
+]
+DEFENSIVE_CANDIDATES = [
+    ("Defensive demand after BTC drawdown", {}),
+    ("Defensive demand, broader opportunity window", dict(btc_drop=.025, relative_min=.012, slots=12, fraction=.052)),
+    ("Defensive demand, deep BTC stress", dict(btc_drop=.065, relative_min=.025, hold=32)),
+    ("Defensive demand, hold established resilience", dict(breakout=False, btc_drop=.035, relative_min=.018, hold=42)),
+    ("Defensive demand in liquid contracts", dict(volume_min=2_500_000., activity=1.45, btc_drop=.035, chase=.035)),
+    ("Defensive demand, rapid exits and repeated participation", dict(breakout=False, btc_drop=.030, relative_min=.011,
+                                                                      hold=16, cooldown=18, slots=14, fraction=.045)),
+]
+STRESS_BASE = dict(alignment=.035, daily_entries=6, depth=.0155, fraction=.06, hold=20,
+                   interval_minutes=30, market_floor=-.0005, sigma=2.4, slots=10, trail=.05)
+STRESS_CANDIDATES = [
+    ("Shock breakout, BTC drawdown risk ramp", STRESS_BASE),
+    ("Shock breakout, moderate haircut", STRESS_BASE | dict(ordinary_size=.55)),
+    ("Shock breakout, strong ordinary-risk haircut", STRESS_BASE | dict(ordinary_size=.16, stress=.045)),
+    ("Shock breakout, wider qualified events", STRESS_BASE | dict(ordinary_size=.25, alignment=.02, sigma=2.35)),
+    ("Shock breakout, severe stress only for full risk", STRESS_BASE | dict(stress=.08, ordinary_size=.35)),
+    ("Shock breakout, early stress response", STRESS_BASE | dict(stress=.035, ordinary_size=.25, hold=16)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -151,6 +193,10 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     breadth = "A broad reversal after an observed market-wide washout may persist when participation returns across many contracts."
     compression = "A price breakout may persist if it ends a relatively quiet period and arrives with higher observable turnover."
     compression_context = "Quiet range escapes may be more durable when the preceding market shows wider participation."
+    capacity = "A prior-traded-notional size cap may mitigate the execution vulnerability measured in the compression replay."
+    relief = "If a countertrend move fails in an established trend, the original direction may resume after execution costs."
+    defensive = "Contracts with independent relative demand during a prior broad drawdown may continue to strengthen."
+    stress = "The booked shock strategy earned more on days after BTC declines. Causal risk sizing tests whether scaling by that state improves net Sharpe."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -163,6 +209,10 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "breadth": ("Market-wide breadth rebound", BREADTH_REBOUND, breadth),
         "compression": ("Volatility compression breakout", COMPRESSION, compression),
         "compression_context": ("Compression breakout with prior participation", COMPRESSION_CONTEXT, compression_context),
+        "compression_capacity": ("Compression breakout with observable capacity", COMPRESSION_CAPACITY, capacity),
+        "failed_relief": ("Failed countertrend relief", FAILED_RELIEF, relief),
+        "defensive": ("Defensive demand rotation", DEFENSIVE_ROTATION, defensive),
+        "stress": ("Shock breakout with BTC stress sizing", SHOCK_STRESS, stress),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -197,7 +247,8 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--port", type=int, default=8765)
     mode = p.add_mutually_exclusive_group()
-    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth", "compression", "compression_context"):
+    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
+                "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -213,6 +264,10 @@ def main():
         "breadth": (BREADTH_CANDIDATES, BREADTH_REBOUND),
         "compression": (COMPRESSION_CANDIDATES, COMPRESSION),
         "compression_context": (CONTEXT_BREAKOUT_CANDIDATES, COMPRESSION_CONTEXT),
+        "compression_capacity": (CAPACITY_BREAKOUT_CANDIDATES, COMPRESSION_CAPACITY),
+        "failed_relief": (RELIEF_CANDIDATES, FAILED_RELIEF),
+        "defensive": (DEFENSIVE_CANDIDATES, DEFENSIVE_ROTATION),
+        "stress": (STRESS_CANDIDATES, SHOCK_STRESS),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
