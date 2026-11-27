@@ -247,3 +247,15 @@ The finished two-year comparisons show lower Sharpe and ROI than H-0172. The hal
 Version 6.0.0 tests a rolling 60-minute shock evaluated on each completed half-hour bar. It keeps the longer return horizon while admitting shocks between the old hourly boundaries. The 24-hour prior return and the volatility of earlier rolling returns end before the entire shock window. The existing booked-position policy, cooldown and daily cap remain intact. This tests observation cadence independently of the shorter shock horizon that weakened prior half-hour candidates. Six initial hypotheses H-0188 through H-0193 were accepted in campaign C-d8e88f88d9755faf under `position-rolling-screen`.
 
 Rolling smaller shocks H-0189 led the six-month screen with 3.113 Sharpe, 443 positions across 158 entry days, +59.59% net ROI and 10.55% maximum drawdown. The four highest-Sharpe eligible configurations advanced unchanged as H-0194 through H-0197, campaign C-5240745963ea98af. The full runs and their saved specifications are under `position-rolling-full`.
+
+| Two-year candidate | Completed positions | UTC entry days | Net Sharpe | Net ROI | Maximum drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| H-0172, comparison | 1,040 | 452 | 1.116 | +59.25% | 27.68% |
+| H-0194, rolling smaller shocks | 1,133 | 462 | 1.373 | +72.11% | 15.38% |
+| H-0195, rolling persistence | 929 | 413 | 1.442 | +76.92% | 12.41% |
+| H-0196, stronger rolling surprise | 1,101 | 456 | 1.385 | +78.91% | 18.78% |
+| H-0197, rolling steady market | 1,100 | 458 | 1.405 | +76.88% | 18.53% |
+
+H-0197 (job `506af418ae3a4a88a660c5beed717ca1`) has the highest Sharpe among the variants meeting the 1,000-position requirement. It requires a 1.65% rolling-hour move, a 2.3 volatility-scaled shock score, a 3.5% prior 24-hour return and a market median of at least −0.05%. It takes up to five new entries per UTC day at 7.5% of equity each, with a 20-hour expiry. The busiest ten dates accounted for 4.55% of its completed positions. Equity reached 12,055.94 USDT at the end of the first 18 months and 17,688.28 USDT at the full-period end. Native terminal accounting reconciled for all four. The full wave took 316.88 s and sampled approximately 2.10 GiB worker RSS. The results remain in-sample across the late-selection Liquid 50 archive. [H-0197 result](http://127.0.0.1:8765/api/hypotheses/H-0197/results)
+
+The exact nine-day diagnostic H-0199 replayed H-0198 for H-0197's parameters. It reconciled 46 ordinary fills to audited opens, modeled prices and fees. Four exceeded the entire executed bar's traded notional, with a maximum of 8.48 times and a median of 4.61% of recorded volume. The diagnostic began with a fresh wallet. The result still needs a capacity-aware check over the full history. [Exact diagnostic](http://127.0.0.1:8765/api/hypotheses/H-0199/results)
