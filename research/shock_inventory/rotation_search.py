@@ -24,6 +24,7 @@ PAIR_DISLOCATION = {"id": "economic_peer_spread_reversion", "version": "1.0.0"}
 PAIR_BREAKOUT = {"id": "economic_peer_spread_breakout", "version": "1.0.0"}
 BREADTH_REBOUND = {"id": "market_breadth_rebound", "version": "1.0.0"}
 COMPRESSION = {"id": "quiet_range_breakout", "version": "1.0.0"}
+COMPRESSION_CONTEXT = {"id": "quiet_range_breakout", "version": "1.1.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
     ("Relative momentum, more peers", dict(hold=36, enter=.79, keep=.55, slots=8, fraction=.075)),
@@ -122,6 +123,17 @@ COMPRESSION_CANDIDATES = [
     ("Compression escape, slow repricing", dict(ratio=.72, activity=1.35, hold=72, cooldown=72)),
     ("Compression escape, avoid chasing", dict(ratio=.73, chase=.020, activity=1.6, break_min=.003, hold=24)),
 ]
+CONTEXT_BREAKOUT_CANDIDATES = [
+    ("Compression with prior market breadth", dict(ratio=.78, activity=1.30, fraction=.065, slots=10)),
+    ("Compression with positive market breadth", dict(ratio=.78, activity=1.30, fraction=.065, slots=10,
+                                                       participation=.54, market_floor=0.)),
+    ("Compression with relative pre-break strength", dict(ratio=.78, activity=1.30, fraction=.065, slots=10,
+                                                            participation=.40, relative_floor=.008)),
+    ("Compression respite, wider qualifying pressure", dict(ratio=.86, activity=1.18, fraction=.052, slots=13,
+                                                              participation=.45, chase=.024)),
+    ("Compression respite, moderate market floor", dict(ratio=.82, activity=1.20, fraction=.055, slots=12,
+                                                          participation=.47, market_floor=-.012, hold=42)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -138,6 +150,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     pair_breakout = "A widening spread between previously correlated contracts may persist if it reflects relative repricing rather than a short-lived quote imbalance."
     breadth = "A broad reversal after an observed market-wide washout may persist when participation returns across many contracts."
     compression = "A price breakout may persist if it ends a relatively quiet period and arrives with higher observable turnover."
+    compression_context = "Quiet range escapes may be more durable when the preceding market shows wider participation."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -149,6 +162,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "pair_breakout": ("Economic peer spread continuation", PAIR_BREAKOUT, pair_breakout),
         "breadth": ("Market-wide breadth rebound", BREADTH_REBOUND, breadth),
         "compression": ("Volatility compression breakout", COMPRESSION, compression),
+        "compression_context": ("Compression breakout with prior participation", COMPRESSION_CONTEXT, compression_context),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -183,7 +197,7 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--port", type=int, default=8765)
     mode = p.add_mutually_exclusive_group()
-    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth", "compression"):
+    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth", "compression", "compression_context"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -198,6 +212,7 @@ def main():
         "pair_breakout": (PAIR_BREAKOUT_CANDIDATES, PAIR_BREAKOUT),
         "breadth": (BREADTH_CANDIDATES, BREADTH_REBOUND),
         "compression": (COMPRESSION_CANDIDATES, COMPRESSION),
+        "compression_context": (CONTEXT_BREAKOUT_CANDIDATES, COMPRESSION_CONTEXT),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
