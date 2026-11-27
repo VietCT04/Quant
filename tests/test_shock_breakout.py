@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,8 +9,10 @@ from quant.strategy import Portfolio
 from quant.trading import Orders
 from research_strategies import shock_breakout as breakout
 from research_strategies import shock_breakout_confirmed as confirmed
+from research_strategies import shock_breakout_contextual as contextual
 from research_strategies import shock_breakout_distributed as distributed
 from research_strategies import shock_breakout_fast as fast
+from research_strategies import shock_breakout_hedged_clock as hedged
 from research_strategies import shock_breakout_managed as managed
 from research_strategies import shock_breakout_rolling as rolling
 
@@ -131,3 +134,49 @@ def test_rolling_hour_observes_two_half_hours_and_lags_the_whole_shock():
     assert plan.decision_ticks == ordinary.decision_ticks == 360
     for feature in ("impulse", "prior_trend", "prior_vol"):
         assert json.loads(plan.features[feature].parameters_json)["periods"] == 2
+
+
+def test_contextual_breadth_filters_entries_and_preserves_exits(monkeypatch):
+    params = {k: v.default for k, v in contextual.STRATEGY.parameters.items()} | {"breadth_min": .5, "vol_target": .01}
+    symbols = tuple(f"S{i}" for i in range(20))
+    state = contextual.STRATEGY.initialize(params, symbols, None)
+    result = Orders(symbols)
+    values = {"impulse": np.full((1, 20), .03), "prior_trend": np.full((1, 20), .04),
+              "context_return": np.full((1, 20), .05), "prior_vol": np.full((1, 20), .02)}
+    values["context_return"][0, 0] = -.10
+    row = SimpleNamespace(symbols=symbols, status=np.zeros((1, 20), dtype="u1"), values=values)
+    account = Portfolio(5000, {"qty": np.zeros(20)}, 10_000., ready=symbols)
+
+    def orders(state, row, observed, intents):
+        assert observed.ready == symbols[1:]
+        intents.buy(symbols[1], notional=100.)
+        intents.close(symbols[0])
+        return {}
+
+    monkeypatch.setattr(contextual.base, "STRATEGY", replace(contextual.base.STRATEGY, orders=orders))
+    contextual.trade(state, row, account, result)
+    assert [(i.symbol, i.kind, i.size) for i in result.items] == [(symbols[1], 0, 50.), (symbols[0], 2, 0.)]
+
+
+def test_hedge_rebalances_booked_exposure_and_excludes_btc_signal(monkeypatch):
+    params = {k: v.default for k, v in hedged.STRATEGY.parameters.items()}
+    symbols = ("BTCUSDT", "ALTUSDT")
+    state = hedged.STRATEGY.initialize(params, symbols, None)
+    values = {"close": np.array([[100., 100.]])}
+    row = SimpleNamespace(symbols=symbols, status=np.zeros((1, 2), dtype="u1"), values=values,
+                          timestamps_ms=np.array([4 * breakout.HOUR]))
+    booked = {"qty": np.array([-2., 30.]), "mark": np.array([100., 100.])}
+    account = Portfolio(4 * breakout.HOUR + 5000, booked, 10_000., ready=symbols)
+
+    def plan(state, row, observed, intents):
+        assert observed.ready == ("ALTUSDT",)
+        return {}
+
+    monkeypatch.setattr(hedged.archived.base, "STRATEGY", replace(hedged.archived.base.STRATEGY, orders=plan))
+    orders = Orders(symbols)
+    hedged.trade(state, row, account, orders)
+    assert [(i.symbol, i.kind, i.size) for i in orders.items] == [("BTCUSDT", 0, -850.)]
+    booked["qty"][1] = 0.
+    orders = Orders(symbols)
+    hedged.trade(state, row, account, orders)
+    assert [(i.symbol, i.kind) for i in orders.items] == [("BTCUSDT", 2)]
