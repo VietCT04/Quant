@@ -22,6 +22,8 @@ MARK_REVERSION = {"id": "perpetual_mark_reversion", "version": "1.0.0"}
 FLOW_ABSORPTION = {"id": "taker_flow_absorption", "version": "1.0.0"}
 PAIR_DISLOCATION = {"id": "economic_peer_spread_reversion", "version": "1.0.0"}
 PAIR_BREAKOUT = {"id": "economic_peer_spread_breakout", "version": "1.0.0"}
+BREADTH_REBOUND = {"id": "market_breadth_rebound", "version": "1.0.0"}
+COMPRESSION = {"id": "quiet_range_breakout", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
     ("Relative momentum, more peers", dict(hold=36, enter=.79, keep=.55, slots=8, fraction=.075)),
@@ -102,6 +104,24 @@ PAIR_BREAKOUT_CANDIDATES = [
     ("Peer repricing continuation, broader breaks", dict(entry_z=1.25, min_gap=.009, correlation=.57, extension_z=.25,
                                                          history=60, hold=32, cooldown=12, fraction=.115)),
 ]
+BREADTH_CANDIDATES = [
+    ("Broad washout, recovery leaders", {}),
+    ("Broad washout, lagging recoveries", dict(leaders=False)),
+    ("Broad squeeze, short the subsequent decline", dict(side=-1, market_shock=.023, hold=12, take=.05)),
+    ("Broad washout, stronger confirmation", dict(recovery_breadth=.72, peer_bounce=.003, hold=21)),
+    ("Broad washout, less severe events", dict(market_shock=.012, event_gap=12, hold=12, event_slots=12)),
+    ("Broad washout, persistent prior market", dict(prior_limit=.020, market_shock=.014, hold=26)),
+    ("Broad washout, deeper damage and longer recovery", dict(market_shock=.026, stop=.065, hold=30, take=.10)),
+]
+COMPRESSION_CANDIDATES = [
+    ("Compression escape, long", {}),
+    ("Compression escape, signed", dict(direction=0, fraction=.065)),
+    ("Compression escape, short", dict(direction=-1, hold=20)),
+    ("Compression escape, stronger expansion", dict(ratio=.57, activity=2.2, hold=48)),
+    ("Compression escape, broaden activity", dict(ratio=.78, activity=1.3, fraction=.065, slots=10)),
+    ("Compression escape, slow repricing", dict(ratio=.72, activity=1.35, hold=72, cooldown=72)),
+    ("Compression escape, avoid chasing", dict(ratio=.73, chase=.020, activity=1.6, break_min=.003, hold=24)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -116,6 +136,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     absorption = "Directional taker flow may reverse when high turnover produces little price movement in its direction versus peers."
     pairs = "A highly correlated economic peer pair may converge from a large temporary spread deviation after both legs pay costs."
     pair_breakout = "A widening spread between previously correlated contracts may persist if it reflects relative repricing rather than a short-lived quote imbalance."
+    breadth = "A broad reversal after an observed market-wide washout may persist when participation returns across many contracts."
+    compression = "A price breakout may persist if it ends a relatively quiet period and arrives with higher observable turnover."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -125,6 +147,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "absorption": ("Taker flow absorption", FLOW_ABSORPTION, absorption),
         "pairs": ("Economic peer spread convergence", PAIR_DISLOCATION, pairs),
         "pair_breakout": ("Economic peer spread continuation", PAIR_BREAKOUT, pair_breakout),
+        "breadth": ("Market-wide breadth rebound", BREADTH_REBOUND, breadth),
+        "compression": ("Volatility compression breakout", COMPRESSION, compression),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -159,7 +183,7 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--port", type=int, default=8765)
     mode = p.add_mutually_exclusive_group()
-    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout"):
+    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth", "compression"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -172,6 +196,8 @@ def main():
         "absorption": (ABSORPTION_CANDIDATES, FLOW_ABSORPTION),
         "pairs": (PAIR_CANDIDATES, PAIR_DISLOCATION),
         "pair_breakout": (PAIR_BREAKOUT_CANDIDATES, PAIR_BREAKOUT),
+        "breadth": (BREADTH_CANDIDATES, BREADTH_REBOUND),
+        "compression": (COMPRESSION_CANDIDATES, COMPRESSION),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
