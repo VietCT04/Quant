@@ -40,6 +40,8 @@ UTC_TRAIL = {"id": "fixed_clock_turnover_handoff", "version": "1.5.0"}
 UTC_CONVICTION = {"id": "fixed_clock_turnover_handoff", "version": "1.6.0"}
 UTC_HORIZON = {"id": "fixed_clock_turnover_handoff", "version": "1.7.0"}
 UTC_TRANSITION = {"id": "fixed_clock_turnover_handoff", "version": "1.8.0"}
+UTC_COMBINED_RISK = {"id": "fixed_clock_turnover_handoff", "version": "1.9.0"}
+UTC_RELATIVE = {"id": "fixed_clock_turnover_handoff", "version": "2.0.0"}
 SIGNED_VARIANCE = {"id": "signed_variance_reversal", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
@@ -316,6 +318,25 @@ UTC_TRANSITION_CANDIDATES = [
     ("Liquid clock, transition reduction with wider price gate", UTC_CONVICTION_BASE | dict(drift=.0125, activity=1.30,
                                                                                            min_quote=1_750_000.)),
 ]
+UTC_COMBINED_BASE = UTC_CONVICTION_BASE | dict(weak_size=.30, move_band=.014, monday=False, transition_weight=.05)
+UTC_COMBINED_CANDIDATES = [
+    ("Move-based size with Friday reduction", UTC_COMBINED_BASE),
+    ("Move-based size with both transition reductions", UTC_COMBINED_BASE | dict(monday=True)),
+    ("Move-based size with stronger Friday reduction", UTC_COMBINED_BASE | dict(transition_weight=.032)),
+    ("Move-based size with moderate Friday reduction", UTC_COMBINED_BASE | dict(transition_weight=.09)),
+    ("Move-based size and a nine-hour expiry", UTC_COMBINED_BASE | dict(hold=9, weekday_weight=.18)),
+    ("Move-based size and broader qualifying opportunities", UTC_COMBINED_BASE | dict(drift=.012, activity=1.30,
+                                                                                      weak_size=.38, slots=11)),
+]
+UTC_RELATIVE_CANDIDATES = [
+    ("Liquid clock, relative strength of prior move", UTC_CONVICTION_BASE),
+    ("Liquid clock, stronger relative hurdle", UTC_CONVICTION_BASE | dict(relative_start=.012, weak_size=.27)),
+    ("Liquid clock, gentler relative scaling", UTC_CONVICTION_BASE | dict(relative_start=.010, weak_size=.55)),
+    ("Liquid clock, relative strength with broader absolute gate", UTC_CONVICTION_BASE | dict(drift=.0115,
+                                                                                              activity=1.32, slots=11)),
+    ("Liquid clock, relative sizing with deeper liquidity", UTC_CONVICTION_BASE | dict(min_quote=2_400_000., activity=1.22,
+                                                                                       drift=.012, relative_width=.022)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -348,6 +369,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     utc_conviction = "Stronger preceding directional moves improved the liquid-clock test. A causal size ramp tests the effect without dropping modest entries."
     utc_horizon = "Persistence may depend on whether the preceding direction has held for four to twelve completed hours."
     utc_transition = "Smaller risk immediately before and after the weekend may reduce the hold-to-hold variation of a clocked signal."
+    utc_combined = "Observed move-based sizing and a smaller weekend-transition budget may improve the same clocked signal jointly."
+    utc_relative = "A prevailing market move can inflate absolute momentum. Size depends on the move relative to observed peer returns."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -376,6 +399,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "utc_conviction": ("Clocked turnover with move-based sizing", UTC_CONVICTION, utc_conviction),
         "utc_horizon": ("Clocked turnover with alternative preceding horizons", UTC_HORIZON, utc_horizon),
         "utc_transition": ("Clocked turnover with weekend transition sizing", UTC_TRANSITION, utc_transition),
+        "utc_combined": ("Clocked turnover with move and transition sizing", UTC_COMBINED_RISK, utc_combined),
+        "utc_relative": ("Clocked turnover with peer-relative sizing", UTC_RELATIVE, utc_relative),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -413,7 +438,7 @@ def main():
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
                 "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
                 "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk",
-                "utc_flow", "utc_trail", "utc_conviction", "utc_horizon", "utc_transition"):
+                "utc_flow", "utc_trail", "utc_conviction", "utc_horizon", "utc_transition", "utc_combined", "utc_relative"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -445,6 +470,8 @@ def main():
         "utc_conviction": (UTC_CONVICTION_CANDIDATES, UTC_CONVICTION),
         "utc_horizon": (UTC_HORIZON_CANDIDATES, UTC_HORIZON),
         "utc_transition": (UTC_TRANSITION_CANDIDATES, UTC_TRANSITION),
+        "utc_combined": (UTC_COMBINED_CANDIDATES, UTC_COMBINED_RISK),
+        "utc_relative": (UTC_RELATIVE_CANDIDATES, UTC_RELATIVE),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)

@@ -12,9 +12,10 @@ from . import defensive_rotation, flow_size_divergence
 from . import shock_stress, shock_stress_btc
 from . import utc_turnover_flow, utc_turnover_handoff, utc_turnover_risk, utc_turnover_seasonal, utc_turnover_weekend
 from . import utc_turnover_trail
-from . import utc_turnover_conviction
+from . import utc_turnover_conviction, utc_turnover_conviction_transition
 from . import utc_turnover_horizon
 from . import utc_turnover_transition
+from . import utc_turnover_relative
 from . import signed_variance
 
 STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, scaling.STRATEGY,
@@ -33,4 +34,5 @@ STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, sc
               utc_turnover_handoff.STRATEGY, shock_stress_btc.STRATEGY, signed_variance.STRATEGY,
               utc_turnover_weekend.STRATEGY, utc_turnover_seasonal.STRATEGY, utc_turnover_risk.STRATEGY,
               utc_turnover_flow.STRATEGY, utc_turnover_trail.STRATEGY, utc_turnover_conviction.STRATEGY,
-              utc_turnover_horizon.STRATEGY, utc_turnover_transition.STRATEGY)
+              utc_turnover_horizon.STRATEGY, utc_turnover_transition.STRATEGY,
+              utc_turnover_conviction_transition.STRATEGY, utc_turnover_relative.STRATEGY)
