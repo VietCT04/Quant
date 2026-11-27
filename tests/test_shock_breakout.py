@@ -6,6 +6,7 @@ import pytest
 from quant.strategy import Portfolio
 from quant.trading import Orders
 from research_strategies import shock_breakout as breakout
+from research_strategies import shock_breakout_fast as fast
 from research_strategies import shock_breakout_managed as managed
 
 
@@ -61,3 +62,15 @@ def test_managed_budget_caps_entry_and_preserves_close(monkeypatch):
     monkeypatch.setattr(breakout, "trade", plan)
     managed.trade(state, row, account, orders)
     assert [(intent.symbol, intent.kind, intent.size) for intent in orders.items] == [("A", 0, 250.), ("B", 2, 0.)]
+
+
+def test_half_hour_breakout_preserves_wall_clock_warmup():
+    hourly = breakout.prepare({})
+    half_hour = fast.prepare({})
+    assert fast.STRATEGY.orders is breakout.STRATEGY.orders
+    assert half_hour.decision_ticks == 360
+    assert half_hour.feature_periods == dict.fromkeys(hourly.feature_periods, 360)
+    assert half_hour.warmup_bars == hourly.warmup_bars
+    assert half_hour.features["impulse"] == hourly.features["impulse"]
+    assert half_hour.features["prior_trend"] != hourly.features["prior_trend"]
+    assert half_hour.features["prior_vol"] != hourly.features["prior_vol"]
