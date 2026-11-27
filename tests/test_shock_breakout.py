@@ -6,6 +6,7 @@ import pytest
 from quant.strategy import Portfolio
 from quant.trading import Orders
 from research_strategies import shock_breakout as breakout
+from research_strategies import shock_breakout_confirmed as confirmed
 from research_strategies import shock_breakout_distributed as distributed
 from research_strategies import shock_breakout_fast as fast
 from research_strategies import shock_breakout_managed as managed
@@ -93,3 +94,28 @@ def test_distributed_entry_quota_resets_at_utc_midnight(monkeypatch):
         orders = Orders(symbols)
         distributed.trade(state, row, Portfolio(now, {"qty": np.zeros(2)}, 10_000.), orders)
         assert [order.kind for order in orders.items] == kinds
+
+
+def test_flow_filter_only_affects_entry_readiness_and_stop_uses_booked_price(monkeypatch):
+    params = {key: rule.default for key, rule in confirmed.STRATEGY.parameters.items()} | {
+        "flow_floor": .04, "drift_floor": .01, "entry_stop": .025,
+    }
+    symbols = ("A", "B")
+    state = confirmed.STRATEGY.initialize(params, symbols, None)
+    row = SimpleNamespace(symbols=symbols, status=np.zeros((1, 2), dtype="u1"), values={
+        "close": np.array([[97., 100.]]), "shock_flow": np.array([[-.1, .2]]),
+        "prior_drift": np.array([[.10, .03]]),
+    })
+    account = Portfolio(5000, {"qty": np.array([1., 0.]), "entry": np.array([100., 0.])},
+                        10_000., ready=symbols)
+
+    def entries(state, row, observed, orders):
+        assert observed.ready == ("B",)
+        assert observed.positions is account.positions
+        orders.buy("B", notional=100.)
+        return {}
+
+    monkeypatch.setattr(distributed, "trade", entries)
+    orders = Orders(symbols)
+    confirmed.trade(state, row, account, orders)
+    assert [(intent.symbol, intent.kind) for intent in orders.items] == [("B", 0), ("A", 2)]

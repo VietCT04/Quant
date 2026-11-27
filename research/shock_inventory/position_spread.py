@@ -13,6 +13,7 @@ from .sharpe_search import BREAKOUT, FULL, SCREEN
 
 
 SPREAD = BREAKOUT | {"version": "4.0.0"}
+CONFIRMED = BREAKOUT | {"version": "5.0.0"}
 REFERENCE = dict(alignment=.07, depth=.05, fraction=.22, hold=168, market_floor=-.003,
                  side=1, sigma=3., slots=4, trail=.12)
 COMMON = dict(alignment=.035, depth=.022, fraction=.10, hold=24, market_floor=-.003,
@@ -37,15 +38,30 @@ BRIDGE = [
     ("Hourly broader eligibility with smaller risk", dict(depth=.019, sigma=2.35, alignment=.025,
                                                               fraction=.075, slots=10, hold=16)),
 ]
+DEMAND_BASE = COMMON | dict(interval_minutes=60, depth=.019, sigma=2.35, alignment=.025,
+                            fraction=.075, slots=10, hold=16, daily_entries=5)
+DEMAND = [
+    ("Hourly demand, selective flow", dict(depth=.017, sigma=2.2, flow_floor=.035)),
+    ("Hourly demand, stronger flow", dict(depth=.0155, sigma=2.1, flow_floor=.11)),
+    ("Hourly demand, positive pre-shock drift", dict(depth=.017, sigma=2.2, drift_floor=.003)),
+    ("Hourly demand, flow and drift", dict(depth=.016, sigma=2.05, flow_floor=.015, drift_floor=.002)),
+    ("Hourly demand, invalidate weak fills", dict(entry_stop=.024)),
+    ("Hourly demand and failed-breakout exit", dict(depth=.017, sigma=2.2, flow_floor=.025, entry_stop=.030)),
+    ("Half-hour demand and strength", dict(interval_minutes=30, depth=.015, sigma=2.10, flow_floor=.045,
+                                           alignment=.06, hold=30, daily_entries=6, fraction=.09)),
+    ("Half-hour demand, faster loss exit", dict(interval_minutes=30, depth=.0165, sigma=2.05, flow_floor=.02,
+                                                alignment=.052, hold=27, daily_entries=6, entry_stop=.028, fraction=.09)),
+]
 
 
-def submit(port, folder, promote=(), *, control=True, bridge=False):
+def submit(port, folder, promote=(), *, control=True, bridge=False, confirmed=False):
     dataset = q.data.open(request(port, "/service")["coverage"]["source"])
     screen = q.data.select(dataset, start=SCREEN[0], end=SCREEN[1])
     selected = q.data.select(dataset, start=FULL[0], end=FULL[1]) if promote else screen
     fingerprint = q.data.fingerprint(selected)
-    base, variants = (HOURLY, BRIDGE) if bridge else (COMMON, VARIANTS)
-    rows = [(name, base | changes, SPREAD, None) for name, changes in variants] if not promote else []
+    base, variants = (DEMAND_BASE, DEMAND) if confirmed else (HOURLY, BRIDGE) if bridge else (COMMON, VARIANTS)
+    strategy = CONFIRMED if confirmed else SPREAD
+    rows = [(name, base | changes, strategy, None) for name, changes in variants] if not promote else []
     if promote:
         source_fingerprint = q.data.fingerprint(screen)
         for key in promote:
@@ -53,12 +69,12 @@ def submit(port, folder, promote=(), *, control=True, bridge=False):
             job, = h["experiments"]
             spec = job["specification"]
             frozen = {k: v for k, v in spec["strategy"].items() if k != "warmup_fingerprint"}
-            same_configuration = prepare(SPREAD, spec["parameters"], rebalance_ticks=1)[3] == frozen
+            same_configuration = prepare(strategy, spec["parameters"], rebalance_ticks=1)[3] == frozen
             if (job["status"] != "completed" or spec["dataset_fingerprint"] != source_fingerprint
                     or spec["costs"] or spec["seed"] != 716 or not same_configuration
                     or not spec["evaluation"].get("position_spread")):
                 raise ValueError(f"{key} is not a compatible completed screen")
-            rows.append((h["name"], spec["parameters"], SPREAD, job["id"]))
+            rows.append((h["name"], spec["parameters"], strategy, job["id"]))
         if control:
             original = request(port, "/hypotheses/H-0143/results")["experiments"][0]
             if original["specification"]["parameters"] != REFERENCE:
@@ -76,7 +92,7 @@ def submit(port, folder, promote=(), *, control=True, bridge=False):
              candidates=[{"kind": "native", "strategy": strategy, "parameters": parameters}])
         for name, parameters, strategy, origin in rows
     ]
-    round_name = "hourly follow-up" if bridge else "broader position days"
+    round_name = "confirmed demand" if confirmed else "hourly follow-up" if bridge else "broader position days"
     payload = {"campaign": f"Shock repricing / {round_name} / " + ("full" if promote else "screen"),
                "hypotheses": items}
     folder.mkdir(parents=True, exist_ok=False)
@@ -106,9 +122,12 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--promote", nargs="+", default=[])
-    parser.add_argument("--bridge", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--bridge", action="store_true")
+    mode.add_argument("--confirmed", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(submit(args.port, args.out, args.promote, control=not args.bridge, bridge=args.bridge)), flush=True)
+    print(json.dumps(submit(args.port, args.out, args.promote, control=not (args.bridge or args.confirmed),
+                            bridge=args.bridge, confirmed=args.confirmed)), flush=True)
 
 
 if __name__ == "__main__":
