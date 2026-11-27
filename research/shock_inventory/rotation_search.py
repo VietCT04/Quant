@@ -18,6 +18,7 @@ STRATEGY = {"id": "peer_rotation_persistence", "version": "1.0.0"}
 RECLAIM = {"id": "failed_range_reclaim", "version": "1.0.0"}
 REFERENCE_ROLL = {"id": "displayed_return_roll", "version": "1.0.0"}
 ADAPTIVE_PEER = {"id": "adaptive_peer_spread", "version": "1.0.0"}
+MARK_REVERSION = {"id": "perpetual_mark_reversion", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
     ("Relative momentum, more peers", dict(hold=36, enter=.79, keep=.55, slots=8, fraction=.075)),
@@ -64,6 +65,14 @@ ADAPTIVE_CANDIDATES = [
     ("Adaptive fast response", dict(decay_days=12, ridge=.8, hold=8, edge=.0045)),
     ("Adaptive signed positions", dict(short=True, ridge=.8, hold=10, edge=.0055, fraction=.065)),
 ]
+MARK_CANDIDATES = [
+    ("Perpetual mark gap, signed inventory", {}),
+    ("Perpetual mark gap, long only", dict(direction=1)),
+    ("Perpetual mark gap, short only", dict(direction=-1)),
+    ("Perpetual mark gap, smaller fresh deviations", dict(gap=.003, max_mark_move=.0015, min_quote=25_000., fraction=.035)),
+    ("Perpetual mark gap, deeper dislocations", dict(gap=.010, max_mark_move=.006, hold=35, fraction=.05)),
+    ("Perpetual mark gap, either clock phase", dict(fresh_only=False, gap=.0065, min_quote=30_000., fraction=.05)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -74,11 +83,13 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     reclaim_mechanism = "A completed reclaim after a failed range probe can precede a sustained move back into the range."
     roll_mechanism = "An expiring hourly return changes the displayed daily return and may shift near-term demand."
     adaptive_mechanism = "A model trained on matured price changes can adapt to time-varying relative return patterns."
+    mark_mechanism = "A large trade-price deviation from a recently published perpetual mark may close when mark movement and recent trend are modest."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
         "reference": ("Displayed return roll", REFERENCE_ROLL, roll_mechanism),
         "adaptive": ("Adaptive peer forecast", ADAPTIVE_PEER, adaptive_mechanism),
+        "mark": ("Perpetual mark dislocation", MARK_REVERSION, mark_mechanism),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -113,7 +124,7 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--port", type=int, default=8765)
     mode = p.add_mutually_exclusive_group()
-    for key in ("reclaim", "reference", "adaptive"):
+    for key in ("reclaim", "reference", "adaptive", "mark"):
         mode.add_argument(f"--{key}", action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -122,6 +133,7 @@ def main():
         "reclaim": (RECLAIM_CANDIDATES, RECLAIM),
         "reference": (ROLL_CANDIDATES, REFERENCE_ROLL),
         "adaptive": (ADAPTIVE_CANDIDATES, ADAPTIVE_PEER),
+        "mark": (MARK_CANDIDATES, MARK_REVERSION),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)

@@ -6,7 +6,7 @@ from . import shock_breakout, shock_lead_lag
 from . import shock_breakout_confirmed, shock_breakout_distributed, shock_breakout_fast, shock_breakout_managed
 from . import shock_breakout_contextual, shock_breakout_hedged, shock_breakout_hedged_clock, shock_breakout_rolling
 from . import shock_breakout_hedge_control
-from . import adaptive_peer, peer_rotation, range_reclaim, reference_roll
+from . import adaptive_peer, mark_reversion, peer_rotation, range_reclaim, reference_roll
 
 STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, scaling.STRATEGY,
               phase5.STRATEGY, slow_trend.STRATEGY, shock_inventory.STRATEGY, shock_inventory_patient.STRATEGY,
@@ -17,4 +17,4 @@ STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, sc
               shock_breakout_contextual.STRATEGY, shock_breakout_hedged.STRATEGY,
               shock_breakout_hedged_clock.STRATEGY, shock_breakout_hedge_control.STRATEGY,
               peer_rotation.STRATEGY, range_reclaim.STRATEGY, reference_roll.STRATEGY,
-              adaptive_peer.STRATEGY)
+              adaptive_peer.STRATEGY, mark_reversion.STRATEGY)
