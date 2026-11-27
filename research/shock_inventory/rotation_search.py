@@ -35,6 +35,7 @@ UTC_HANDOFF = {"id": "fixed_clock_turnover_handoff", "version": "1.0.0"}
 UTC_WEEKEND = {"id": "fixed_clock_turnover_handoff", "version": "1.1.0"}
 UTC_SEASONAL = {"id": "fixed_clock_turnover_handoff", "version": "1.2.0"}
 UTC_RISK = {"id": "fixed_clock_turnover_handoff", "version": "1.3.0"}
+UTC_FLOW = {"id": "fixed_clock_turnover_handoff", "version": "1.4.0"}
 SIGNED_VARIANCE = {"id": "signed_variance_reversal", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
@@ -254,6 +255,18 @@ UTC_RISK_CANDIDATES = [
     ("14 UTC prior volatility cap, broader opportunities", dict(direction=0, fraction=.045, clock_window="14",
                                                                 vol_target=.008, activity=1.32, drift=.009, slots=12)),
 ]
+UTC_FLOW_CANDIDATES = [
+    ("14 UTC quote confirmation, eight-hour base", dict(direction=0, fraction=.05, clock_window="14", weekday_weight=.08)),
+    ("14 UTC quote confirmation, peer-relative pressure", dict(direction=0, fraction=.05, clock_window="14",
+                                                                weekday_weight=.08, relative_pressure=True)),
+    ("14 UTC quote confirmation, moderate haircut", dict(direction=0, fraction=.05, clock_window="14",
+                                                          weekday_weight=.08, weak_weight=.55)),
+    ("14 UTC quote confirmation, stricter activity", dict(direction=0, fraction=.05, clock_window="14",
+                                                       weekday_weight=.10, pressure_min=.042, weak_weight=.30,
+                                                       min_quote=1_200_000., activity=1.36)),
+    ("14 UTC quote confirmation, shorter risk window", dict(direction=0, fraction=.055, clock_window="14",
+                                                            weekday_weight=.10, hold=6, stop=.023)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -281,6 +294,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     weekend = "The initial 14 UTC rule earned stronger weekend returns. A causal weekend risk rule tests if that effect survives controlled widening."
     seasonal = "Turnover relative to the same weekday may distinguish unusual demand from a regular weekday-to-weekend change."
     utc_risk = "Capping the size of previously volatile contracts may reduce portfolio variation without tightening the turnover signal."
+    utc_flow = "Directional continuation may be more durable when observed aggressive quote flow confirms the entry."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -304,6 +318,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "weekend": ("Weekend turnover continuation", UTC_WEEKEND, weekend),
         "seasonal": ("Same-weekday turnover normalization", UTC_SEASONAL, seasonal),
         "utc_risk": ("Observed volatility sizing for clocked turnover", UTC_RISK, utc_risk),
+        "utc_flow": ("Quote pressure sizing for clocked turnover", UTC_FLOW, utc_flow),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -340,7 +355,7 @@ def main():
     mode = p.add_mutually_exclusive_group()
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
                 "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
-                "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk"):
+                "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk", "utc_flow"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -367,6 +382,7 @@ def main():
         "weekend": (WEEKEND_CANDIDATES, UTC_WEEKEND),
         "seasonal": (SEASONAL_CANDIDATES, UTC_SEASONAL),
         "utc_risk": (UTC_RISK_CANDIDATES, UTC_RISK),
+        "utc_flow": (UTC_FLOW_CANDIDATES, UTC_FLOW),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
