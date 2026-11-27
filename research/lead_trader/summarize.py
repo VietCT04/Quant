@@ -100,6 +100,7 @@ def summary(folder):
         (pl.col("maxOpenInterest") * pl.col("avgCost")).alias("peak_notional_proxy"),
         (pl.col("closedVolume") / pl.col("maxOpenInterest")).alias("volume_over_peak"),
     )
+    openings = {(r["symbol"], r["side"], r["opened"]) for r in positions.to_dicts()}
     result = {
         "orders": {"n": len(orders), "symbols": orders["symbol"].n_unique(), "utc": span(orders["orderUpdateTime"]),
                    "notional": distribution(orders["notional"]), "side_counts": orders.group_by("side").len().to_dicts(),
@@ -115,6 +116,7 @@ def summary(folder):
     for side in ("Long", "Short"):
         group = closed.filter(pl.col("side") == side)
         pnl = np.sort(group["closingPnl"].to_numpy())
+        opposite = "Short" if side == "Long" else "Long"
         result["position_rows"]["closed_summary"][side] = {
             "n": len(group), "win_rate": float((group["closingPnl"] > 0).mean()), "pnl_sum": group["closingPnl"].sum(),
             "pnl": distribution(group["closingPnl"]), "leverage": distribution(group["leverage"].cast(pl.Float64)),
@@ -122,6 +124,10 @@ def summary(folder):
             "volume_over_peak": distribution(group["volume_over_peak"]),
             "share_volume_above_peak": float((group["volume_over_peak"] > 1.00001).mean()),
             "pnl_best_five": float(pnl[-5:].sum()), "pnl_worst_five": float(pnl[:5].sum()),
+            "opposite_open_at_close": sum(
+                any((symbol, opposite, closed_ms + delta) in openings for delta in (-1, 0, 1))
+                for symbol, closed_ms in group.select("symbol", "closed").iter_rows()
+            ),
         }
     life = list(lifecycles(positions, orders))
     actions = [action for position in life for action in position["actions"]]

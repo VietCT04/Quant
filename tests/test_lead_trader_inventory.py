@@ -9,6 +9,7 @@ from quant.trading import Orders
 from research.lead_trader.align import BAR, FIELDS, completed_features
 from research.lead_trader.summarize import lifecycles
 from research_strategies import active_pullback_inventory as strategy
+from research_strategies import active_pullback_handoff as handoff
 
 
 def test_event_features_exclude_the_event_bar_and_honor_availability():
@@ -68,3 +69,25 @@ def test_strategy_waits_for_actual_inventory_and_keeps_candidate_state_private()
     assert decide(106, 100.4, quantity=.2, fast=0.) == []
     assert decide(110, 101., quantity=.2, fast=0., swing=.01)[0].kind == 3
     assert all(x[0] == 0 for x in (other[1], other[2], other[5]))
+
+
+def test_handoff_reverses_only_on_confirmed_opposite_pressure():
+    _, _, p, _ = prepare({"id": "active_pullback_inventory", "version": "2.0.0"}, {}, rebalance_ticks=1)
+    symbols = ("A",)
+    states = handoff.STRATEGY.initialize(p, symbols, None)
+    states[1][0], states[2][0], states[3][0] = 50 * strategy.MINUTE, .1, 100.
+    v = {"close": 96., "fast": -.006, "swing": -.015, "trend": -.015,
+         "minute_quote": 40_000., "minute_buys": 12_000., "reference_volume": 300_000.}
+    bar = SimpleNamespace(symbols=symbols, status=np.zeros((1, 1)),
+                          values={name: np.array([[value]]) for name, value in v.items()})
+    account = Portfolio(100 * strategy.MINUTE, {"qty": np.array([.1]), "entry": np.array([100.])},
+                        10_000., available_margin=10_000., ready=symbols)
+    book = Orders(symbols)
+    handoff.trade(states, bar, account, book)
+    only, = book.items
+    assert only.kind == 1
+    np.testing.assert_allclose(only.size, -(.1 + 11.5 / 96))
+    bar.values["minute_buys"][0, 0] = 24_000.
+    close = Orders(symbols)
+    handoff.trade(states, bar, account, close)
+    assert close.items[0].kind == 2

@@ -18,12 +18,19 @@ DESIGNS = (
     ("Long shocks with trend and taker confirmation", {"mode": "impulse", "side": 1}),
     ("Short shocks with trend and taker confirmation", {"mode": "impulse", "side": -1}),
 )
+HANDOFF = (
+    ("Selective inventory handoff after opposite pressure", {"mode": "impulse", "hold": 240, "shock": .005,
+      "trim": .009, "activity": 2., "min_quote": 25_000., "spacing": 10, "cooldown": 45}),
+    ("Selective inventory handoff with slower accumulation", {"mode": "pullback", "hold": 300, "shock": .004,
+      "trim": .012, "activity": 2., "min_quote": 25_000., "spacing": 15, "cooldown": 60, "handoff_move": .014}),
+)
 
 
 def main():
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("out", type=Path)
     cli.add_argument("--port", type=int, default=8765)
+    cli.add_argument("--handoff", action="store_true")
     cli.add_argument("--promote", nargs=2, metavar=("HYPOTHESIS", "JOB"))
     args = cli.parse_args()
     port = args.port
@@ -34,14 +41,15 @@ def main():
                 "dataset_fingerprint": q.data.fingerprint(selection), "seed": 514, "costs": {},
                 "evaluation": {"research_window": "full_history" if full else "six_month", "origin_job": None,
                                "promotion": "Positive net ROI and Sharpe, with at least 200 closed lifecycles and no material execution failures."}}
-    designs = DESIGNS
+    selector = STRATEGY | {"version": "2.0.0"} if args.handoff else STRATEGY
+    designs = HANDOFF if args.handoff else DESIGNS
     if full:
         owner, job_id = args.promote
         job = next(j for j in request(port, f"/hypotheses/{owner}/results")["experiments"] if j["id"] == job_id)
         if job["status"] != "completed":
             raise ValueError("Only a completed screen can be promoted")
         spec = job["specification"]
-        resolved = prepare(STRATEGY, spec["parameters"], rebalance_ticks=1)[3]
+        resolved = prepare(selector, spec["parameters"], rebalance_ticks=1)[3]
         if {k: v for k, v in spec["strategy"].items() if k != "warmup_fingerprint"} != resolved:
             raise ValueError("Screen strategy does not match the loaded version")
         designs = ((f"Full-history validation of {owner}", spec["parameters"]),)
@@ -52,11 +60,14 @@ def main():
         thesis = ("After a lagged directional move, an active one-minute pullback offers cheaper inventory in the existing trend."
                   if mode == "pullback" else
                   "An active one-minute shock with confirming taker flow and lagged trend may persist after costs.")
+        if args.handoff:
+            thesis += " Exit with a reversal only when both fast price and taker flow confirm opposite pressure."
         rows.append({"name": name, "family": "Active-market inventory", "stage": "validation" if full else "simulation",
                      "mechanism": thesis, "prediction": "Positive net equity return with repeated small increments and reductions.",
                      "definition": "Lagged 60-minute trend, one-minute turnover filter and signal, booked inventory, 10 USDT market clips.",
-                     "protocol": protocol, "candidates": [{"kind": "native", "strategy": STRATEGY, "parameters": params}]})
-    payload = {"campaign": f"Active-market inventory / {protocol['evaluation']['research_window']}", "hypotheses": rows}
+                     "protocol": protocol, "candidates": [{"kind": "native", "strategy": selector, "parameters": params}]})
+    family = "Active-market inventory handoff" if args.handoff else "Active-market inventory"
+    payload = {"campaign": f"{family} / {protocol['evaluation']['research_window']}", "hypotheses": rows}
     args.out.mkdir(parents=True, exist_ok=False)
     (args.out / "specification.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     then = perf_counter()

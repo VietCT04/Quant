@@ -19,7 +19,7 @@ from . import utc_turnover_relative
 from . import utc_turnover_invalidation
 from . import utc_turnover_market_context
 from . import signed_variance
-from . import active_pullback_inventory
+from . import active_pullback_handoff, active_pullback_inventory
 
 STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, scaling.STRATEGY,
               phase5.STRATEGY, slow_trend.STRATEGY, shock_inventory.STRATEGY, shock_inventory_patient.STRATEGY,
@@ -40,4 +40,4 @@ STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, sc
               utc_turnover_horizon.STRATEGY, utc_turnover_transition.STRATEGY,
               utc_turnover_conviction_transition.STRATEGY, utc_turnover_relative.STRATEGY,
               utc_turnover_invalidation.STRATEGY, utc_turnover_market_context.STRATEGY,
-              active_pullback_inventory.STRATEGY)
+              active_pullback_inventory.STRATEGY, active_pullback_handoff.STRATEGY)
