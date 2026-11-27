@@ -42,6 +42,8 @@ UTC_HORIZON = {"id": "fixed_clock_turnover_handoff", "version": "1.7.0"}
 UTC_TRANSITION = {"id": "fixed_clock_turnover_handoff", "version": "1.8.0"}
 UTC_COMBINED_RISK = {"id": "fixed_clock_turnover_handoff", "version": "1.9.0"}
 UTC_RELATIVE = {"id": "fixed_clock_turnover_handoff", "version": "2.0.0"}
+UTC_INVALIDATION = {"id": "fixed_clock_turnover_handoff", "version": "2.1.0"}
+UTC_MARKET_CONTEXT = {"id": "fixed_clock_turnover_handoff", "version": "2.2.0"}
 SIGNED_VARIANCE = {"id": "signed_variance_reversal", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
@@ -339,6 +341,23 @@ UTC_RELATIVE_CANDIDATES = [
 ]
 
 
+UTC_INVALIDATION_BASE = UTC_COMBINED_BASE | dict(transition_weight=.032)
+UTC_INVALIDATION_CANDIDATES = [
+    ("Continuation invalidation after two hours", UTC_INVALIDATION_BASE),
+    ("Continuation invalidation on shallow adverse marks", UTC_INVALIDATION_BASE | dict(adverse_mark=.0035)),
+    ("Continuation invalidation on sharper reversals", UTC_INVALIDATION_BASE | dict(opposing_hour=.009)),
+    ("Continuation invalidation after four hours", UTC_INVALIDATION_BASE | dict(check_after=4)),
+]
+UTC_MARKET_CONTEXT_CANDIDATES = [
+    ("Reduce risk in moves against the broad market", UTC_INVALIDATION_BASE),
+    ("Reduce risk only against a larger broad move", UTC_INVALIDATION_BASE | dict(against_band=.009)),
+    ("Heavily reduce against-market positions", UTC_INVALIDATION_BASE | dict(against_size=.15)),
+    ("Use milder scaling on the broader entry policy", UTC_INVALIDATION_BASE | dict(drift=.0125, activity=1.30,
+                                                                                     min_quote=1_750_000.,
+                                                                                     against_size=.60)),
+]
+
+
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     dataset = q.data.open(request(port, "/service")["coverage"]["source"])
     start, end = FULL if full else SCREEN
@@ -371,6 +390,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     utc_transition = "Smaller risk immediately before and after the weekend may reduce the hold-to-hold variation of a clocked signal."
     utc_combined = "Observed move-based sizing and a smaller weekend-transition budget may improve the same clocked signal jointly."
     utc_relative = "A prevailing market move can inflate absolute momentum. Size depends on the move relative to observed peer returns."
+    utc_invalidation = "An adverse mark from the booked entry plus a newly completed opposing hour may invalidate the original continuation."
+    utc_market_context = "A local move against a contemporaneous broad move may have less durable participation. Size scales down as the conflict grows."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -401,6 +422,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "utc_transition": ("Clocked turnover with weekend transition sizing", UTC_TRANSITION, utc_transition),
         "utc_combined": ("Clocked turnover with move and transition sizing", UTC_COMBINED_RISK, utc_combined),
         "utc_relative": ("Clocked turnover with peer-relative sizing", UTC_RELATIVE, utc_relative),
+        "utc_invalidation": ("Clocked turnover with continuation invalidation", UTC_INVALIDATION, utc_invalidation),
+        "utc_market_context": ("Clocked turnover with market context sizing", UTC_MARKET_CONTEXT, utc_market_context),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -438,7 +461,8 @@ def main():
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
                 "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
                 "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk",
-                "utc_flow", "utc_trail", "utc_conviction", "utc_horizon", "utc_transition", "utc_combined", "utc_relative"):
+                "utc_flow", "utc_trail", "utc_conviction", "utc_horizon", "utc_transition", "utc_combined", "utc_relative",
+                "utc_invalidation", "utc_market_context"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -472,6 +496,8 @@ def main():
         "utc_transition": (UTC_TRANSITION_CANDIDATES, UTC_TRANSITION),
         "utc_combined": (UTC_COMBINED_CANDIDATES, UTC_COMBINED_RISK),
         "utc_relative": (UTC_RELATIVE_CANDIDATES, UTC_RELATIVE),
+        "utc_invalidation": (UTC_INVALIDATION_CANDIDATES, UTC_INVALIDATION),
+        "utc_market_context": (UTC_MARKET_CONTEXT_CANDIDATES, UTC_MARKET_CONTEXT),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)

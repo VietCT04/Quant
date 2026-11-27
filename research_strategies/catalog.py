@@ -16,6 +16,8 @@ from . import utc_turnover_conviction, utc_turnover_conviction_transition
 from . import utc_turnover_horizon
 from . import utc_turnover_transition
 from . import utc_turnover_relative
+from . import utc_turnover_invalidation
+from . import utc_turnover_market_context
 from . import signed_variance
 
 STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, scaling.STRATEGY,
@@ -35,4 +37,5 @@ STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, sc
               utc_turnover_weekend.STRATEGY, utc_turnover_seasonal.STRATEGY, utc_turnover_risk.STRATEGY,
               utc_turnover_flow.STRATEGY, utc_turnover_trail.STRATEGY, utc_turnover_conviction.STRATEGY,
               utc_turnover_horizon.STRATEGY, utc_turnover_transition.STRATEGY,
-              utc_turnover_conviction_transition.STRATEGY, utc_turnover_relative.STRATEGY)
+              utc_turnover_conviction_transition.STRATEGY, utc_turnover_relative.STRATEGY,
+              utc_turnover_invalidation.STRATEGY, utc_turnover_market_context.STRATEGY)
