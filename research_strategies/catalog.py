@@ -8,8 +8,9 @@ from . import shock_breakout_contextual, shock_breakout_hedged, shock_breakout_h
 from . import shock_breakout_hedge_control
 from . import adaptive_peer, flow_absorption, mark_reversion, pair_breakout, pair_dislocation, peer_rotation, range_reclaim, reference_roll
 from . import breadth_rebound, compression_breakout, compression_capacity, compression_context, failed_relief
-from . import defensive_rotation
+from . import defensive_rotation, flow_size_divergence
 from . import shock_stress
+from . import utc_turnover_handoff
 
 STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, scaling.STRATEGY,
               phase5.STRATEGY, slow_trend.STRATEGY, shock_inventory.STRATEGY, shock_inventory_patient.STRATEGY,
@@ -23,4 +24,5 @@ STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, sc
               adaptive_peer.STRATEGY, mark_reversion.STRATEGY, flow_absorption.STRATEGY, pair_dislocation.STRATEGY,
               pair_breakout.STRATEGY, breadth_rebound.STRATEGY, compression_breakout.STRATEGY,
               compression_context.STRATEGY, compression_capacity.STRATEGY, failed_relief.STRATEGY,
-              defensive_rotation.STRATEGY, shock_stress.STRATEGY)
+              defensive_rotation.STRATEGY, shock_stress.STRATEGY, flow_size_divergence.STRATEGY,
+              utc_turnover_handoff.STRATEGY)

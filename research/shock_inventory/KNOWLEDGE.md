@@ -388,6 +388,8 @@ Compression version 1.2.0 keeps next-open execution and caps the size of each ne
 
 The H-0145–H-0149 screens registered in C-83d7f41a61b1c059. All five were profitable with 2.097–2.753 net Sharpe. H-0147 led at 2.753 Sharpe, +44.57% net ROI and 496 positions. H-0148 closed 527 positions at 2.346 Sharpe and 7.19% maximum drawdown. Four advanced unchanged as H-0150–H-0153 under C-f87108ccdce72920. The screen does not show whether modeled capacity improves at the next open.
 
+The four capped variants completed two-year runs at 0.706–0.742 net Sharpe and 1,760–1,892 closed positions. H-0150 led at 0.742 Sharpe, +34.03% net ROI and 1,765 positions. H-0153 had the lowest drawdown at 14.00% and 1,892 positions, with 0.733 Sharpe. All fell short of the original compression breakout's 1.255 full-history Sharpe. H-0164 repeats the original seven-day diagnostic with the capped variant and a fresh wallet so its modeled fills can be compared to coincident traded volume. [Full capped run](http://127.0.0.1:8791/api/hypotheses/H-0150/results)
+
 ### Failure of a countertrend move
 
 The independent failed-relief strategy requires a prior three-day directional trend that ends before a six-hour countertrend move. A completed two-hour price move back toward the original trend confirms the failure. A market trend filter and observed quote turnover limit trades. Short trades after failed relief rallies and long trades after failed pullbacks are separate variants. The model trades at the next open and exits on age, adverse move or a profit threshold. Rejection risks include buying or shorting a bounce too late and taking concentrated exposures to peers during broad market stress.
@@ -402,4 +404,18 @@ The distinct defensive-demand strategy tests an entry rule following that diagno
 
 The six defensive-demand screens H-0282–H-0287 ran as C-50ea8b76b251e7e2. The strongest was H-0285 at 1.203 net Sharpe, +8.34% ROI, 200 positions and 43 entry days. The faster broad version H-0287 reached 311 positions with 0.157 Sharpe and +0.58% ROI and advanced as H-0288. H-0285 was submitted unchanged as H-0289 to test whether the earlier archive, which had more qualifying BTC drawdown days, supplies additional opportunities. The screening results show a frequency-strength trade-off and do not establish a broad edge. [Strongest screen](http://127.0.0.1:8765/api/hypotheses/H-0285/results)
 
+The two-year broad policy H-0288 closed 1,010 positions at −0.261 Sharpe and −5.61% net ROI. H-0289, the strongest screen carried forward unchanged, returned +7.09% at 0.334 Sharpe with 619 positions and 15.96% maximum drawdown. Neither validates a strong relative-demand edge at the tested frequencies. [H-0288](http://127.0.0.1:8765/api/hypotheses/H-0288/results) · [H-0289](http://127.0.0.1:8765/api/hypotheses/H-0289/results)
+
 Shock version 8.3.0 makes a separate comparison with the unhedged H-0074 entry logic. It scales each new altcoin order from an ordinary-risk multiplier toward full size as the preceding BTC seven-day decline deepens. The BTC weekly window ends before the original shock measurement starts. Existing exits stay conditional on the booked strategy and BTC is excluded. Keeping nonzero size outside the highest-stress state helps test risk allocation without discarding most of the position count. Variants change the size ramp, test a wider original entry gate, or change duration. This directly tests the archive observation under native fills and costs.
+
+H-0154–H-0159 screened in C-aa87b54c9d9fdcdc at 1.281–1.707 net Sharpe. H-0155 led with 1.707 Sharpe, +14.32% net ROI and 350 positions. Broader eligibility H-0157 raised count to 434 and reduced Sharpe. H-0160–H-0163 advanced unchanged under C-cc0b9d4de9ada7d0. [Best stress-sizing screen](http://127.0.0.1:8791/api/hypotheses/H-0155/results)
+
+### Quote flow versus constituent count
+
+The next strategy enters when direction inferred from audited eight-hour taker quote flow differs from direction inferred from constituent counts. It subtracts the peer median of the disagreement and requires enough dollar flow in the trade direction. Strong directional quote flow relative to counts may indicate larger average execution sizes on one side. The aggregates cannot identify participants or their motives. Long, short and signed variants test the effect with different relative-flow, liquidity and time gates. No signal uses future trade direction or volume.
+
+The frozen six-month screen is H-0290–H-0295 on port 8765 under C-f2bd7b9e1d2ab598. Its request and receipt are under `data/research/shock-inventory/three-sharpe-flow-size`. [First screen](http://127.0.0.1:8765/api/hypotheses/H-0290)
+
+### Directional continuation during scheduled turnover changes
+
+The next strategy tests whether a relative six-hour move continues when the most recent completed hour confirms its direction and its turnover is materially above the same UTC hour the previous day. The predefined 08:00, 14:00 and 20:00 UTC clocks compare timing without relying on a forecast, an exchange opening calendar or timezone-specific data. Positions expire after a brief holding period, with adverse-move exits. Variants compare the clocks, a signed strategy, stricter turnover and broader opportunities. Comparing clocks on the same archive can favor transient intraday patterns.

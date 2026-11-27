@@ -29,6 +29,8 @@ COMPRESSION_CAPACITY = {"id": "quiet_range_breakout", "version": "1.2.0"}
 FAILED_RELIEF = {"id": "failed_countertrend_relief", "version": "1.0.0"}
 DEFENSIVE_ROTATION = {"id": "defensive_demand_rotation", "version": "1.0.0"}
 SHOCK_STRESS = {"id": "shock_repricing_breakout", "version": "8.3.0"}
+FLOW_SIZE = {"id": "quote_count_flow_divergence", "version": "1.0.0"}
+UTC_HANDOFF = {"id": "fixed_clock_turnover_handoff", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
     ("Relative momentum, more peers", dict(hold=36, enter=.79, keep=.55, slots=8, fraction=.075)),
@@ -176,6 +178,25 @@ STRESS_CANDIDATES = [
     ("Shock breakout, severe stress only for full risk", STRESS_BASE | dict(stress=.08, ordinary_size=.35)),
     ("Shock breakout, early stress response", STRESS_BASE | dict(stress=.035, ordinary_size=.25, hold=16)),
 ]
+FLOW_SIZE_CANDIDATES = [
+    ("Quote-count flow divergence, long", {}),
+    ("Quote-count flow divergence, short", dict(direction=-1)),
+    ("Quote-count flow divergence, either side", dict(direction=0, fraction=.058)),
+    ("Quote-count divergence, ordinary mismatch", dict(size_gap=.062, flow_min=.04, hold=28, fraction=.06, slots=11)),
+    ("Quote-count divergence, dollar leadership stronger", dict(size_gap=.12, flow_min=.075,
+                                                                 count_max=0., hold=50, min_volume=3_000_000.)),
+    ("Quote-count divergence, persistence amid soft trend", dict(size_gap=.08, flow_min=.05, recent_limit=.025,
+                                                                  prior_limit=.04, hold=52, cooldown=52)),
+]
+UTC_HANDOFF_CANDIDATES = [
+    ("Clocked turnover handoff, 14 UTC long", {}),
+    ("Clocked turnover handoff, 08 UTC long", dict(utc_hour=8)),
+    ("Clocked turnover handoff, 20 UTC long", dict(utc_hour=20)),
+    ("Clocked turnover handoff, signed", dict(direction=0, fraction=.05)),
+    ("Clocked turnover handoff, midday intensification", dict(activity=1.75, min_quote=1_600_000., drift=.017, hold=6)),
+    ("Clocked turnover handoff, wider daily opportunities", dict(drift=.007, activity=1.18, confirmation=.0015,
+                                                                hold=10, slots=12, fraction=.05)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -197,6 +218,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     relief = "If a countertrend move fails in an established trend, the original direction may resume after execution costs."
     defensive = "Contracts with independent relative demand during a prior broad drawdown may continue to strengthen."
     stress = "The booked shock strategy earned more on days after BTC declines. Causal risk sizing tests whether scaling by that state improves net Sharpe."
+    flow_size = "Directional quote value may predict continuation when constituent counts disagree with the quoted flow."
+    handoff = "A preceding relative move may continue when it is confirmed by increased turnover at a fixed UTC window."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -213,6 +236,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "failed_relief": ("Failed countertrend relief", FAILED_RELIEF, relief),
         "defensive": ("Defensive demand rotation", DEFENSIVE_ROTATION, defensive),
         "stress": ("Shock breakout with BTC stress sizing", SHOCK_STRESS, stress),
+        "flow_size": ("Quote-count flow divergence", FLOW_SIZE, flow_size),
+        "utc_handoff": ("Fixed-clock turnover handoff", UTC_HANDOFF, handoff),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -248,7 +273,8 @@ def main():
     p.add_argument("--port", type=int, default=8765)
     mode = p.add_mutually_exclusive_group()
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
-                "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress"):
+                "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
+                "flow_size", "utc_handoff"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -268,6 +294,8 @@ def main():
         "failed_relief": (RELIEF_CANDIDATES, FAILED_RELIEF),
         "defensive": (DEFENSIVE_CANDIDATES, DEFENSIVE_ROTATION),
         "stress": (STRESS_CANDIDATES, SHOCK_STRESS),
+        "flow_size": (FLOW_SIZE_CANDIDATES, FLOW_SIZE),
+        "utc_handoff": (UTC_HANDOFF_CANDIDATES, UTC_HANDOFF),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
