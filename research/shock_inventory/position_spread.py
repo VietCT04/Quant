@@ -188,7 +188,7 @@ def outcome(port, key):
                    "top_ten_day_fraction": sum(days[-10:]) / result["lifecycles"] if days else 0.,
                    "entries_by_utc_day": dates}
         strategy = job["specification"]["strategy"]
-        if strategy["id"] == HEDGED["id"] and strategy["version"] in ("8.0.0", HEDGED["version"]):
+        if strategy["id"] == HEDGED["id"] and strategy["version"] in ("8.0.0", HEDGED["version"], "8.2.0"):
             hedge_positions = lifecycle["per_symbol"].get("BTCUSDT", {}).get("completed_positions", 0)
             result |= {"hedge_positions": hedge_positions, "directional_positions": result["lifecycles"] - hedge_positions,
                        "directional_entry_days_lower_bound": max(0, len(days) - hedge_positions)}

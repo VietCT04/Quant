@@ -273,3 +273,23 @@ The version 8.0.0 hedge screens booked no BTC hedges. Their scheduled-clock cond
 The full context runs H-0208 through H-0211 recorded 854–987 positions and 0.952–1.583 Sharpe. H-0208 led with 1.583 Sharpe, 854 positions, 367 entry days, +68.21% net ROI and 11.81% drawdown. It grew equity to 11,563.53 USDT in the first 18 months and 16,820.89 USDT at the end. The full batch took 383.04 s for 517,720,813 observed bars and sampled about 1.65 GiB of worker RSS mid-run. The six-month leader did not reach either full-history target. The follow-up from H-0208 relaxes the 24- and 48-hour return requirements or the shock hurdle to seek more qualifying trades, with separately tested sizing and holding rules. Its specs are under `position-persistence-*`.
 
 Corrected hedge screens H-0064 through H-0068 booked 63–124 BTC hedge lifecycles and 418–423 directional positions. Six-month Sharpe ranged from 2.605 to 2.757. H-0067, H-0068 and H-0065 advanced unchanged as H-0069 through H-0071. Their specs and evidence are in `position-hedge-clock-*`. The scheduler reuses the same campaign label for the old and corrected hedge waves. Frozen versions and hypothesis IDs distinguish them.
+
+The six persistence follow-ups H-0212 through H-0217 closed 380–510 positions over 136–146 entry days on the six-month screen. The best Sharpe was 2.551 for H-0212 with 380 positions. The six-month breadth increase came with lower Sharpe than H-0207. Three policies advanced unchanged as H-0218 through H-0220 under C-19d2b751c2156c0f.
+
+The corrected hedge full runs produced these results. Position counts exclude the BTC overlay.
+
+| Two-year candidate on port 8791 | Directional positions | BTC hedge positions | Net Sharpe | Net ROI | Max drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| H-0069, broader eligible shocks | 1,065 | 156 | 1.517 | +63.73% | 11.87% |
+| H-0070, faster hedge adjustment | 1,065 | 237 | 1.469 | +60.48% | 12.72% |
+| H-0071, 40% hedge | 1,098 | 226 | 1.400 | +57.19% | 14.04% |
+
+H-0069 improved reported Sharpe and drawdown versus H-0197, with a lower net ROI and slightly fewer directional positions. Its recorded 452 entry dates include dates where only a hedge might have opened. Its exact nine-day replay H-0073 reconciled 52 ordinary fills. Four exceeded total traded notional on their five-second execution bar, with a maximum of 2.65 times. The sizing and signal conditions changed from H-0197, so the difference cannot be attributed to the overlay alone. A frozen version 8.2.0 matched control keeps the same directional parameters and BTC exclusion with a zero hedge fraction. Its receipt is under `position-hedge-matched`.
+
+H-0069 (job `135973023b0d4a33b3c83f98ea539a23`) reached 11,895.85 USDT after the first 18 months and 16,372.58 USDT at the end. BTC hedge lifecycles contributed −115.16 USDT net. Terminal accounting reconciled for all three corrected hedge runs. Their batch took 343.72 seconds to process 517,720,813 observed bars.
+
+The three full persistence follow-ups all recovered the position count and lost risk-adjusted performance versus H-0208. H-0218 finished at 1.156 Sharpe, 1,064 positions, 403 entry days, +49.49% ROI and 15.76% maximum drawdown. H-0219 finished at 0.877 Sharpe with 1,175 positions, and H-0220 finished at 0.963 with 1,219. This contradicts the idea that the persistence screen's Sharpe can be retained by simply relaxing its eligibility thresholds.
+
+The matched unhedged control H-0074 (job `1ff862055aaf4b7b8817f8e37c56f922`) finished with 1,065 directional positions across 443 entry days, no BTC lifecycles, 1.516965 Sharpe, +65.21% net ROI and 13.20% maximum drawdown. The hedged H-0069 finished at 1.517087 Sharpe, +63.73% ROI and 11.87% maximum drawdown. The hedge improved drawdown by about 1.33 percentage points and changed Sharpe by only 0.00012. The matched comparison therefore attributes the higher Sharpe versus H-0197 to the directional configuration rather than a material hedge effect.
+
+None of the completed full-history candidates met the joint target. H-0069 had the highest Sharpe among runs with at least 1,000 directional positions. H-0208 had higher Sharpe, with only 854 positions. The archive was used to select and compare candidates and does not establish independent performance. [H-0069 result](http://127.0.0.1:8791/api/hypotheses/H-0069/results) · [Matched H-0074 result](http://127.0.0.1:8791/api/hypotheses/H-0074/results) · [Exact hedge audit](http://127.0.0.1:8791/api/hypotheses/H-0073/results)

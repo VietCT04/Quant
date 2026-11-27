@@ -12,6 +12,7 @@ from research_strategies import shock_breakout_confirmed as confirmed
 from research_strategies import shock_breakout_contextual as contextual
 from research_strategies import shock_breakout_distributed as distributed
 from research_strategies import shock_breakout_fast as fast
+from research_strategies import shock_breakout_hedge_control as hedge_control
 from research_strategies import shock_breakout_hedged_clock as hedged
 from research_strategies import shock_breakout_managed as managed
 from research_strategies import shock_breakout_rolling as rolling
@@ -180,3 +181,9 @@ def test_hedge_rebalances_booked_exposure_and_excludes_btc_signal(monkeypatch):
     orders = Orders(symbols)
     hedged.trade(state, row, account, orders)
     assert [(i.symbol, i.kind) for i in orders.items] == [("BTCUSDT", 2)]
+    control = hedge_control.STRATEGY
+    state = control.initialize(params | {"hedge_fraction": 0.}, symbols, None)
+    booked["qty"][:] = [0., 30.]
+    orders = Orders(symbols)
+    control.orders(state, row, account, orders)
+    assert not orders.items
