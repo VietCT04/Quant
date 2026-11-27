@@ -19,6 +19,8 @@ RECLAIM = {"id": "failed_range_reclaim", "version": "1.0.0"}
 REFERENCE_ROLL = {"id": "displayed_return_roll", "version": "1.0.0"}
 ADAPTIVE_PEER = {"id": "adaptive_peer_spread", "version": "1.0.0"}
 MARK_REVERSION = {"id": "perpetual_mark_reversion", "version": "1.0.0"}
+FLOW_ABSORPTION = {"id": "taker_flow_absorption", "version": "1.0.0"}
+PAIR_DISLOCATION = {"id": "economic_peer_spread_reversion", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
     ("Relative momentum, more peers", dict(hold=36, enter=.79, keep=.55, slots=8, fraction=.075)),
@@ -73,6 +75,23 @@ MARK_CANDIDATES = [
     ("Perpetual mark gap, deeper dislocations", dict(gap=.010, max_mark_move=.006, hold=35, fraction=.05)),
     ("Perpetual mark gap, either clock phase", dict(fresh_only=False, gap=.0065, min_quote=30_000., fraction=.05)),
 ]
+ABSORPTION_CANDIDATES = [
+    ("Absorbed aggressive selling", {}),
+    ("Absorbed aggressive buying", dict(direction=-1)),
+    ("Absorbed flow in either direction", dict(direction=0, fraction=.06)),
+    ("Absorbed selling, higher pressure", dict(imbalance=.19, activity=1.55, hold=30)),
+    ("Absorbed selling, broader turnover", dict(imbalance=.09, activity=1.12, hold=14, fraction=.07, slots=10)),
+    ("Absorbed selling, strict relative resilience", dict(slip=.002, market_limit=.025, trend_limit=.065, hold=24)),
+    ("Absorbed selling, slower exit", dict(imbalance=.11, activity=1.18, hold=36, cooldown=36, fraction=.07)),
+]
+PAIR_CANDIDATES = [
+    ("Economic peers, rolling beta", {}),
+    ("Economic peers, equal notional legs", dict(beta=False)),
+    ("Economic peers, strongly correlated", dict(correlation=.80, entry_z=1.65)),
+    ("Economic peers, rapid historical anchor", dict(history=60, min_gap=.010, hold=24, cooldown=12)),
+    ("Economic peers, deep relative moves", dict(entry_z=2.6, min_gap=.024, hold=60, slots=7)),
+    ("Economic peers, broader entry", dict(entry_z=1.55, history=60, min_gap=.009, correlation=.58, hold=30, fraction=.115)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -84,12 +103,16 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     roll_mechanism = "An expiring hourly return changes the displayed daily return and may shift near-term demand."
     adaptive_mechanism = "A model trained on matured price changes can adapt to time-varying relative return patterns."
     mark_mechanism = "A large trade-price deviation from a recently published perpetual mark may close when mark movement and recent trend are modest."
+    absorption = "Directional taker flow may reverse when high turnover produces little price movement in its direction versus peers."
+    pairs = "A highly correlated economic peer pair may converge from a large temporary spread deviation after both legs pay costs."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
         "reference": ("Displayed return roll", REFERENCE_ROLL, roll_mechanism),
         "adaptive": ("Adaptive peer forecast", ADAPTIVE_PEER, adaptive_mechanism),
         "mark": ("Perpetual mark dislocation", MARK_REVERSION, mark_mechanism),
+        "absorption": ("Taker flow absorption", FLOW_ABSORPTION, absorption),
+        "pairs": ("Economic peer spread convergence", PAIR_DISLOCATION, pairs),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -124,7 +147,7 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--port", type=int, default=8765)
     mode = p.add_mutually_exclusive_group()
-    for key in ("reclaim", "reference", "adaptive", "mark"):
+    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs"):
         mode.add_argument(f"--{key}", action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -134,6 +157,8 @@ def main():
         "reference": (ROLL_CANDIDATES, REFERENCE_ROLL),
         "adaptive": (ADAPTIVE_CANDIDATES, ADAPTIVE_PEER),
         "mark": (MARK_CANDIDATES, MARK_REVERSION),
+        "absorption": (ABSORPTION_CANDIDATES, FLOW_ABSORPTION),
+        "pairs": (PAIR_CANDIDATES, PAIR_DISLOCATION),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
