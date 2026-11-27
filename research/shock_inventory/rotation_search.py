@@ -33,6 +33,8 @@ SHOCK_STRESS_BTC = {"id": "shock_repricing_breakout", "version": "8.4.0"}
 FLOW_SIZE = {"id": "quote_count_flow_divergence", "version": "1.0.0"}
 UTC_HANDOFF = {"id": "fixed_clock_turnover_handoff", "version": "1.0.0"}
 UTC_WEEKEND = {"id": "fixed_clock_turnover_handoff", "version": "1.1.0"}
+UTC_SEASONAL = {"id": "fixed_clock_turnover_handoff", "version": "1.2.0"}
+UTC_RISK = {"id": "fixed_clock_turnover_handoff", "version": "1.3.0"}
 SIGNED_VARIANCE = {"id": "signed_variance_reversal", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
@@ -231,6 +233,27 @@ WEEKEND_CANDIDATES = [
     ("Weekend risk, stricter range and weekday control", dict(direction=0, fraction=.05, weekday_weight=.35,
                                                                 chase=.024, min_quote=1_200_000., activity=1.35)),
 ]
+SEASONAL_CANDIDATES = [
+    ("14 UTC turnover relative to the same weekday", dict(direction=0, fraction=.05, clock_window="14")),
+    ("14 UTC same-weekday turnover, smaller ordinary risk", dict(direction=0, fraction=.05, clock_window="14",
+                                                                 weekday_weight=.10, hold=5)),
+    ("14 UTC same-weekday turnover, broader opportunities", dict(direction=0, fraction=.045, clock_window="14",
+                                                                  weekday_weight=.18, activity=1.24, slots=12, hold=6)),
+    ("14 UTC requires activity above yesterday and last week", dict(direction=0, fraction=.055, clock_window="14",
+                                                                     anchor="conservative", activity=1.20, hold=6)),
+    ("14 UTC same-weekday turnover, stronger confirmation", dict(direction=0, fraction=.05, clock_window="14",
+                                                                  confirmation=.003, min_quote=1_250_000., hold=7)),
+]
+UTC_RISK_CANDIDATES = [
+    ("14 UTC prior volatility cap", dict(direction=0, fraction=.05, clock_window="14")),
+    ("14 UTC tighter prior volatility cap", dict(direction=0, fraction=.055, clock_window="14", vol_target=.007)),
+    ("14 UTC prior volatility cap, five-hour holding", dict(direction=0, fraction=.055, clock_window="14",
+                                                            vol_target=.01, hold=5, stop=.022)),
+    ("14 UTC prior volatility cap, smaller weekday risk", dict(direction=0, fraction=.05, clock_window="14",
+                                                               vol_target=.01, weekday_weight=.10, hold=6)),
+    ("14 UTC prior volatility cap, broader opportunities", dict(direction=0, fraction=.045, clock_window="14",
+                                                                vol_target=.008, activity=1.32, drift=.009, slots=12)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -256,6 +279,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     handoff = "A preceding relative move may continue when it is confirmed by increased turnover at a fixed UTC window."
     variance = "An unusually one-sided contribution to realized variance may reverse after an observed move in the opposite direction."
     weekend = "The initial 14 UTC rule earned stronger weekend returns. A causal weekend risk rule tests if that effect survives controlled widening."
+    seasonal = "Turnover relative to the same weekday may distinguish unusual demand from a regular weekday-to-weekend change."
+    utc_risk = "Capping the size of previously volatile contracts may reduce portfolio variation without tightening the turnover signal."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -277,6 +302,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "utc_handoff": ("Fixed-clock turnover handoff", UTC_HANDOFF, handoff),
         "variance": ("Signed variance exhaustion", SIGNED_VARIANCE, variance),
         "weekend": ("Weekend turnover continuation", UTC_WEEKEND, weekend),
+        "seasonal": ("Same-weekday turnover normalization", UTC_SEASONAL, seasonal),
+        "utc_risk": ("Observed volatility sizing for clocked turnover", UTC_RISK, utc_risk),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -313,7 +340,7 @@ def main():
     mode = p.add_mutually_exclusive_group()
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
                 "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
-                "flow_size", "utc_handoff", "stress_btc", "variance", "weekend"):
+                "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -338,6 +365,8 @@ def main():
         "utc_handoff": (UTC_HANDOFF_CANDIDATES, UTC_HANDOFF),
         "variance": (VARIANCE_CANDIDATES, SIGNED_VARIANCE),
         "weekend": (WEEKEND_CANDIDATES, UTC_WEEKEND),
+        "seasonal": (SEASONAL_CANDIDATES, UTC_SEASONAL),
+        "utc_risk": (UTC_RISK_CANDIDATES, UTC_RISK),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
