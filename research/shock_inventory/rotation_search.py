@@ -29,8 +29,11 @@ COMPRESSION_CAPACITY = {"id": "quiet_range_breakout", "version": "1.2.0"}
 FAILED_RELIEF = {"id": "failed_countertrend_relief", "version": "1.0.0"}
 DEFENSIVE_ROTATION = {"id": "defensive_demand_rotation", "version": "1.0.0"}
 SHOCK_STRESS = {"id": "shock_repricing_breakout", "version": "8.3.0"}
+SHOCK_STRESS_BTC = {"id": "shock_repricing_breakout", "version": "8.4.0"}
 FLOW_SIZE = {"id": "quote_count_flow_divergence", "version": "1.0.0"}
 UTC_HANDOFF = {"id": "fixed_clock_turnover_handoff", "version": "1.0.0"}
+UTC_WEEKEND = {"id": "fixed_clock_turnover_handoff", "version": "1.1.0"}
+SIGNED_VARIANCE = {"id": "signed_variance_reversal", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
     ("Relative momentum, more peers", dict(hold=36, enter=.79, keep=.55, slots=8, fraction=.075)),
@@ -178,6 +181,13 @@ STRESS_CANDIDATES = [
     ("Shock breakout, severe stress only for full risk", STRESS_BASE | dict(stress=.08, ordinary_size=.35)),
     ("Shock breakout, early stress response", STRESS_BASE | dict(stress=.035, ordinary_size=.25, hold=16)),
 ]
+STRESS_BTC_CANDIDATES = [
+    ("BTC-only stress history, moderate haircut", STRESS_BASE | dict(ordinary_size=.55)),
+    ("BTC-only stress history, stronger haircut", STRESS_BASE | dict(ordinary_size=.35)),
+    ("BTC-only stress history, mild haircut", STRESS_BASE | dict(ordinary_size=.72)),
+    ("BTC-only stress history, lower threshold", STRESS_BASE | dict(stress=.04, ordinary_size=.48)),
+    ("BTC-only stress history, broader events", STRESS_BASE | dict(ordinary_size=.55, alignment=.025, sigma=2.35)),
+]
 FLOW_SIZE_CANDIDATES = [
     ("Quote-count flow divergence, long", {}),
     ("Quote-count flow divergence, short", dict(direction=-1)),
@@ -196,6 +206,30 @@ UTC_HANDOFF_CANDIDATES = [
     ("Clocked turnover handoff, midday intensification", dict(activity=1.75, min_quote=1_600_000., drift=.017, hold=6)),
     ("Clocked turnover handoff, wider daily opportunities", dict(drift=.007, activity=1.18, confirmation=.0015,
                                                                 hold=10, slots=12, fraction=.05)),
+]
+VARIANCE_CANDIDATES = [
+    ("Signed variance, recover from downside dominance", {}),
+    ("Signed variance, fade upside dominance", dict(direction=-1)),
+    ("Signed variance, either side", dict(direction=0, fraction=.05)),
+    ("Signed variance, broader eligibility", dict(skew=.48, separation=.17, min_move=.016,
+                                                 turn_min=.003, fraction=.052, slots=12)),
+    ("Signed variance, 12-hour exhaustion", dict(history=6, min_scale=.019, hold=14, cooldown=22,
+                                                min_move=.018, skew=.56, separation=.20)),
+    ("Signed variance, slower recovery", dict(history=24, min_scale=.038, max_scale=.18,
+                                             hold=36, cooldown=48, min_move=.028, max_move=.18)),
+]
+WEEKEND_CANDIDATES = [
+    ("Weekend risk, same 14 UTC entry", dict(direction=0, fraction=.05, clock_window="14")),
+    ("Weekend risk, adjacent clocks", dict(direction=0, fraction=.05)),
+    ("Weekend risk, broader daily window", dict(direction=0, fraction=.048, clock_window="12-16",
+                                                activity=1.3, drift=.009, slots=12)),
+    ("Weekend risk only, wider turnover window", dict(direction=0, fraction=.058, clock_window="12-16",
+                                                       weekday_weight=0., activity=1.22, drift=.008,
+                                                       confirmation=.0015, slots=13)),
+    ("Weekend risk, alternate clocks", dict(direction=0, fraction=.05, weekday_weight=.1, clock_window="14-20",
+                                             hold=6, activity=1.30, min_quote=1_250_000.)),
+    ("Weekend risk, stricter range and weekday control", dict(direction=0, fraction=.05, weekday_weight=.35,
+                                                                chase=.024, min_quote=1_200_000., activity=1.35)),
 ]
 
 
@@ -220,6 +254,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     stress = "The booked shock strategy earned more on days after BTC declines. Causal risk sizing tests whether scaling by that state improves net Sharpe."
     flow_size = "Directional quote value may predict continuation when constituent counts disagree with the quoted flow."
     handoff = "A preceding relative move may continue when it is confirmed by increased turnover at a fixed UTC window."
+    variance = "An unusually one-sided contribution to realized variance may reverse after an observed move in the opposite direction."
+    weekend = "The initial 14 UTC rule earned stronger weekend returns. A causal weekend risk rule tests if that effect survives controlled widening."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -236,8 +272,11 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "failed_relief": ("Failed countertrend relief", FAILED_RELIEF, relief),
         "defensive": ("Defensive demand rotation", DEFENSIVE_ROTATION, defensive),
         "stress": ("Shock breakout with BTC stress sizing", SHOCK_STRESS, stress),
+        "stress_btc": ("Shock breakout with BTC-only stress history", SHOCK_STRESS_BTC, stress),
         "flow_size": ("Quote-count flow divergence", FLOW_SIZE, flow_size),
         "utc_handoff": ("Fixed-clock turnover handoff", UTC_HANDOFF, handoff),
+        "variance": ("Signed variance exhaustion", SIGNED_VARIANCE, variance),
+        "weekend": ("Weekend turnover continuation", UTC_WEEKEND, weekend),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -274,7 +313,7 @@ def main():
     mode = p.add_mutually_exclusive_group()
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
                 "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
-                "flow_size", "utc_handoff"):
+                "flow_size", "utc_handoff", "stress_btc", "variance", "weekend"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -294,8 +333,11 @@ def main():
         "failed_relief": (RELIEF_CANDIDATES, FAILED_RELIEF),
         "defensive": (DEFENSIVE_CANDIDATES, DEFENSIVE_ROTATION),
         "stress": (STRESS_CANDIDATES, SHOCK_STRESS),
+        "stress_btc": (STRESS_BTC_CANDIDATES, SHOCK_STRESS_BTC),
         "flow_size": (FLOW_SIZE_CANDIDATES, FLOW_SIZE),
         "utc_handoff": (UTC_HANDOFF_CANDIDATES, UTC_HANDOFF),
+        "variance": (VARIANCE_CANDIDATES, SIGNED_VARIANCE),
+        "weekend": (WEEKEND_CANDIDATES, UTC_WEEKEND),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
