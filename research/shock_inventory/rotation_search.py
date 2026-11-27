@@ -37,6 +37,8 @@ UTC_SEASONAL = {"id": "fixed_clock_turnover_handoff", "version": "1.2.0"}
 UTC_RISK = {"id": "fixed_clock_turnover_handoff", "version": "1.3.0"}
 UTC_FLOW = {"id": "fixed_clock_turnover_handoff", "version": "1.4.0"}
 UTC_TRAIL = {"id": "fixed_clock_turnover_handoff", "version": "1.5.0"}
+UTC_CONVICTION = {"id": "fixed_clock_turnover_handoff", "version": "1.6.0"}
+UTC_HORIZON = {"id": "fixed_clock_turnover_handoff", "version": "1.7.0"}
 SIGNED_VARIANCE = {"id": "signed_variance_reversal", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
@@ -285,6 +287,26 @@ UTC_TRAIL_CANDIDATES = [
                                                     min_quote=1_500_000., activity=1.38, chase=.025,
                                                     arm_profit=.012, trail_gap=.007)),
 ]
+UTC_CONVICTION_BASE = dict(direction=0, min_quote=1_600_000., activity=1.29, drift=.014,
+                           confirmation=.0017, chase=.025, weekday_weight=.20, clock_window="14", fraction=.05)
+UTC_CONVICTION_CANDIDATES = [
+    ("Clocked continuation, gradual conviction", UTC_CONVICTION_BASE),
+    ("Clocked continuation, gentle conviction", UTC_CONVICTION_BASE | dict(weak_size=.72, move_band=.010)),
+    ("Clocked continuation, emphasize larger moves", UTC_CONVICTION_BASE | dict(weak_size=.30, move_band=.014)),
+    ("Clocked continuation, keep moderate signal count", UTC_CONVICTION_BASE | dict(drift=.012, activity=1.30,
+                                                                                  weak_size=.38, slots=11)),
+    ("Clocked continuation, tighter execution liquidity", UTC_CONVICTION_BASE | dict(min_quote=2_000_000.,
+                                                                                     activity=1.23, drift=.0125,
+                                                                                     weak_size=.5)),
+]
+UTC_HORIZON_CANDIDATES = [
+    ("Liquid clock, four-hour prior move", UTC_CONVICTION_BASE | dict(prior_hours=4)),
+    ("Liquid clock, eight-hour prior move", UTC_CONVICTION_BASE | dict(prior_hours=8)),
+    ("Liquid clock, ten-hour prior move", UTC_CONVICTION_BASE | dict(prior_hours=10)),
+    ("Liquid clock, twelve-hour prior move", UTC_CONVICTION_BASE | dict(prior_hours=12)),
+    ("Liquid clock, four hours with volatility-scaled hurdle", UTC_CONVICTION_BASE | dict(prior_hours=4, drift=.0115)),
+    ("Liquid clock, ten hours with volatility-scaled hurdle", UTC_CONVICTION_BASE | dict(prior_hours=10, drift=.018)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -314,6 +336,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     utc_risk = "Capping the size of previously volatile contracts may reduce portfolio variation without tightening the turnover signal."
     utc_flow = "Directional continuation may be more durable when observed aggressive quote flow confirms the entry."
     utc_trail = "Observed intraday gains may reverse before a fixed exit. Trailing exits test whether only weak continuations should close early."
+    utc_conviction = "Stronger preceding directional moves improved the liquid-clock test. A causal size ramp tests the effect without dropping modest entries."
+    utc_horizon = "Persistence may depend on whether the preceding direction has held for four to twelve completed hours."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -339,6 +363,8 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "utc_risk": ("Observed volatility sizing for clocked turnover", UTC_RISK, utc_risk),
         "utc_flow": ("Quote pressure sizing for clocked turnover", UTC_FLOW, utc_flow),
         "utc_trail": ("Clocked turnover with gain protection", UTC_TRAIL, utc_trail),
+        "utc_conviction": ("Clocked turnover with move-based sizing", UTC_CONVICTION, utc_conviction),
+        "utc_horizon": ("Clocked turnover with alternative preceding horizons", UTC_HORIZON, utc_horizon),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -376,7 +402,7 @@ def main():
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
                 "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
                 "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk",
-                "utc_flow", "utc_trail"):
+                "utc_flow", "utc_trail", "utc_conviction", "utc_horizon"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -405,6 +431,8 @@ def main():
         "utc_risk": (UTC_RISK_CANDIDATES, UTC_RISK),
         "utc_flow": (UTC_FLOW_CANDIDATES, UTC_FLOW),
         "utc_trail": (UTC_TRAIL_CANDIDATES, UTC_TRAIL),
+        "utc_conviction": (UTC_CONVICTION_CANDIDATES, UTC_CONVICTION),
+        "utc_horizon": (UTC_HORIZON_CANDIDATES, UTC_HORIZON),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
