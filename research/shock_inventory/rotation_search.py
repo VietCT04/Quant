@@ -39,6 +39,7 @@ UTC_FLOW = {"id": "fixed_clock_turnover_handoff", "version": "1.4.0"}
 UTC_TRAIL = {"id": "fixed_clock_turnover_handoff", "version": "1.5.0"}
 UTC_CONVICTION = {"id": "fixed_clock_turnover_handoff", "version": "1.6.0"}
 UTC_HORIZON = {"id": "fixed_clock_turnover_handoff", "version": "1.7.0"}
+UTC_TRANSITION = {"id": "fixed_clock_turnover_handoff", "version": "1.8.0"}
 SIGNED_VARIANCE = {"id": "signed_variance_reversal", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
@@ -307,6 +308,14 @@ UTC_HORIZON_CANDIDATES = [
     ("Liquid clock, four hours with volatility-scaled hurdle", UTC_CONVICTION_BASE | dict(prior_hours=4, drift=.0115)),
     ("Liquid clock, ten hours with volatility-scaled hurdle", UTC_CONVICTION_BASE | dict(prior_hours=10, drift=.018)),
 ]
+UTC_TRANSITION_CANDIDATES = [
+    ("Liquid clock, smaller orders on weekend transitions", UTC_CONVICTION_BASE),
+    ("Liquid clock, Friday size reduction", UTC_CONVICTION_BASE | dict(monday=False)),
+    ("Liquid clock, general weekday reduction", UTC_CONVICTION_BASE | dict(weekday_weight=.10, transition_weight=.04)),
+    ("Liquid clock, moderate transition reduction", UTC_CONVICTION_BASE | dict(transition_weight=.10)),
+    ("Liquid clock, transition reduction with wider price gate", UTC_CONVICTION_BASE | dict(drift=.0125, activity=1.30,
+                                                                                           min_quote=1_750_000.)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -338,6 +347,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     utc_trail = "Observed intraday gains may reverse before a fixed exit. Trailing exits test whether only weak continuations should close early."
     utc_conviction = "Stronger preceding directional moves improved the liquid-clock test. A causal size ramp tests the effect without dropping modest entries."
     utc_horizon = "Persistence may depend on whether the preceding direction has held for four to twelve completed hours."
+    utc_transition = "Smaller risk immediately before and after the weekend may reduce the hold-to-hold variation of a clocked signal."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -365,6 +375,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "utc_trail": ("Clocked turnover with gain protection", UTC_TRAIL, utc_trail),
         "utc_conviction": ("Clocked turnover with move-based sizing", UTC_CONVICTION, utc_conviction),
         "utc_horizon": ("Clocked turnover with alternative preceding horizons", UTC_HORIZON, utc_horizon),
+        "utc_transition": ("Clocked turnover with weekend transition sizing", UTC_TRANSITION, utc_transition),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -402,7 +413,7 @@ def main():
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
                 "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
                 "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk",
-                "utc_flow", "utc_trail", "utc_conviction", "utc_horizon"):
+                "utc_flow", "utc_trail", "utc_conviction", "utc_horizon", "utc_transition"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -433,6 +444,7 @@ def main():
         "utc_trail": (UTC_TRAIL_CANDIDATES, UTC_TRAIL),
         "utc_conviction": (UTC_CONVICTION_CANDIDATES, UTC_CONVICTION),
         "utc_horizon": (UTC_HORIZON_CANDIDATES, UTC_HORIZON),
+        "utc_transition": (UTC_TRANSITION_CANDIDATES, UTC_TRANSITION),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)

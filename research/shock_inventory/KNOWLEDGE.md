@@ -490,7 +490,11 @@ H-0353 led the four full trailing candidates at 2.350 net Sharpe, +18.23% ROI an
 
 The matched high-liquidity trailing run H-0357 finished at 2.327 Sharpe on the same 1,099 positions as H-0213, versus 2.397 for the fixed exit. The conservative two-reference H-0235 finished at 2.005 with 960 positions and +18.31% net ROI. Neither beat the existing leader. Five move-based sizing configurations registered as H-0358–H-0362 under C-e5595e0dfe2dd4ff on port 8765. [Matched trailing result](http://127.0.0.1:8765/api/hypotheses/H-0357/results)
 
+The move-based sizing screens reached 3.238–3.358 net Sharpe. H-0360 led with 3.358, +4.73% ROI, 264 positions and the same entry-day count as H-0219. H-0361 raised the position count to 303 at 3.329 Sharpe. Four advanced as H-0363–H-0366. The full simulations are needed because the risk adjustment was selected after the original archive results.
+
 Version 1.7.0 keeps H-0227's entry clock, execution, quote thresholds and size. It tests whether the preceding price trend is better measured over four, eight, ten or twelve completed hours, with two variants adjusting the minimum price move for the different horizon. The prior return still ends before the confirming hour. Varying only the measurement horizon first keeps the comparison legible. The same archive supplied the leading baseline, so any selected result remains in-sample.
+
+Version 1.8.0 tests lower Friday and Monday size around the weekend session. In H-0227, Friday simple daily returns summed −1.07% over the earlier archive and +0.22% in the six-month screen. H-0310's Friday sum was negative in both intervals. An approximate Friday-only scaling of prior H-0227 daily returns suggests a better ratio at lower Friday size. That rescaling is just a diagnostic. The native experiment preserves actual minimum notionals, compounding, costs and position counts. Monday inclusion tests a broader weekend-transition hypothesis rather than requiring each weekday to be separately optimized.
 
 ### Signed variance exhaustion
 
