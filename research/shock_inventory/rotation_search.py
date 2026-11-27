@@ -21,6 +21,7 @@ ADAPTIVE_PEER = {"id": "adaptive_peer_spread", "version": "1.0.0"}
 MARK_REVERSION = {"id": "perpetual_mark_reversion", "version": "1.0.0"}
 FLOW_ABSORPTION = {"id": "taker_flow_absorption", "version": "1.0.0"}
 PAIR_DISLOCATION = {"id": "economic_peer_spread_reversion", "version": "1.0.0"}
+PAIR_BREAKOUT = {"id": "economic_peer_spread_breakout", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
     ("Relative momentum, more peers", dict(hold=36, enter=.79, keep=.55, slots=8, fraction=.075)),
@@ -92,6 +93,15 @@ PAIR_CANDIDATES = [
     ("Economic peers, deep relative moves", dict(entry_z=2.6, min_gap=.024, hold=60, slots=7)),
     ("Economic peers, broader entry", dict(entry_z=1.55, history=60, min_gap=.009, correlation=.58, hold=30, fraction=.115)),
 ]
+PAIR_BREAKOUT_CANDIDATES = [
+    ("Peer repricing continuation, beta weighted", {}),
+    ("Peer repricing continuation, equal notional", dict(beta=False)),
+    ("Peer repricing continuation, fresh breaks", dict(history=60, entry_z=1.5, min_gap=.010, hold=24, cooldown=12)),
+    ("Peer repricing continuation, sustained relative demand", dict(entry_z=2.35, extension_z=.75, hold=60, trail_z=1.8)),
+    ("Peer repricing continuation, liquid strong links", dict(entry_z=1.6, correlation=.78, min_turnover=3_000_000.)),
+    ("Peer repricing continuation, broader breaks", dict(entry_z=1.25, min_gap=.009, correlation=.57, extension_z=.25,
+                                                         history=60, hold=32, cooldown=12, fraction=.115)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -105,6 +115,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     mark_mechanism = "A large trade-price deviation from a recently published perpetual mark may close when mark movement and recent trend are modest."
     absorption = "Directional taker flow may reverse when high turnover produces little price movement in its direction versus peers."
     pairs = "A highly correlated economic peer pair may converge from a large temporary spread deviation after both legs pay costs."
+    pair_breakout = "A widening spread between previously correlated contracts may persist if it reflects relative repricing rather than a short-lived quote imbalance."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -113,6 +124,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "mark": ("Perpetual mark dislocation", MARK_REVERSION, mark_mechanism),
         "absorption": ("Taker flow absorption", FLOW_ABSORPTION, absorption),
         "pairs": ("Economic peer spread convergence", PAIR_DISLOCATION, pairs),
+        "pair_breakout": ("Economic peer spread continuation", PAIR_BREAKOUT, pair_breakout),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -147,8 +159,8 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--port", type=int, default=8765)
     mode = p.add_mutually_exclusive_group()
-    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs"):
-        mode.add_argument(f"--{key}", action="store_const", const=key, dest="family")
+    for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout"):
+        mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
     items, selector = {
@@ -159,6 +171,7 @@ def main():
         "mark": (MARK_CANDIDATES, MARK_REVERSION),
         "absorption": (ABSORPTION_CANDIDATES, FLOW_ABSORPTION),
         "pairs": (PAIR_CANDIDATES, PAIR_DISLOCATION),
+        "pair_breakout": (PAIR_BREAKOUT_CANDIDATES, PAIR_BREAKOUT),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)
