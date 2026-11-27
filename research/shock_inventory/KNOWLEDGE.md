@@ -226,3 +226,24 @@ H-0161's exact nine-day replay H-0173 reconciled 56 ordinary fills to audited op
 The new comparison is H-0172's 1.1158 two-year Sharpe, 1,040 completed positions, 452 entry days and +59.25% net ROI. H-0161's +84.51% ROI and 455 entry days remain useful comparisons. The experiment retains the 1,000-position requirement, checks date coverage, and seeks a stronger Sharpe–ROI combination.
 
 Version 5.0.0 adds a filter on aggressive-buy imbalance in the completed shock bar, a filter on the six-hour return ending before that bar, and an optional exit when the observable close falls a specified distance below the actual booked entry. Weak-flow and drift filters govern entry readiness only. An open position can still exit when its filter becomes false. The entry stop evaluates completed observations and sends the ordinary next-open close. The eight candidates H-0176 through H-0183 use these mechanisms alone or in combination on hourly and half-hour clocks. They retain daily budgets, 1× leverage, Liquid 50 and V2 base costs. Campaign C-3ce34167bf66eadd records all initial configurations under `position-confirmed-screen`. Promotion considers positive net screens that already show sufficient activity and coverage to justify the longer run.
+
+The 2.4% booked-entry stop variant H-0180 led the six-month screen at 2.704 Sharpe, +53.40% net ROI, 416 positions and 152 entry days. Its improvement over the matched screen's 2.683 Sharpe was small. The six-hour pre-shock drift variant H-0178 reached 2.301 Sharpe with 401 positions. Buying-pressure variants generally performed worse, and the strongest pure flow filter lost money. H-0180, H-0178, H-0183 and H-0182 advanced unchanged as H-0184 through H-0187 under campaign C-2a7ac7ce975055df. A focused comparison varies stop distance and holding limits to distinguish early failure exits from confirmation effects. The secondary registry on port 8791 accepted H-0048 through H-0052 under C-446e0d65534fffe3. Its artifacts are under `position-stops-screen`.
+
+The separate 3.4% stop H-0049 led its screen with 2.905 Sharpe, 414 positions across 151 entry days and +58.34% ROI. The 24-hour hold H-0050 reached 2.748 Sharpe and 415 positions. The tighter 1.6% stop H-0048 reached 2.536 with 421 positions. All three advanced unchanged as H-0053 through H-0055 on port 8791 in campaign C-c5a648b49e1f66d1. The underlying strategy uses a completed-bar loss threshold. Fills can occur beyond that threshold at the next open.
+
+| Two-year candidate | Completed positions | Entry days | Net Sharpe | Net ROI | Maximum drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 8765 / H-0172, comparison | 1,040 | 452 | 1.116 | +59.25% | 27.68% |
+| 8765 / H-0184, 2.4% booked-entry stop | 1,051 | 455 | 0.894 | +37.90% | 30.16% |
+| 8765 / H-0185, six-hour pre-shock drift | 1,017 | 443 | 0.859 | +39.89% | 24.74% |
+| 8765 / H-0186, half-hour flow and loss exit | 1,148 | 468 | 0.626 | +29.84% | 22.02% |
+| 8765 / H-0187, half-hour flow and strength | 876 | 402 | 0.615 | +27.25% | 22.14% |
+| 8791 / H-0053, 3.4% booked-entry stop | 1,044 | 452 | 1.043 | +47.52% | 27.86% |
+| 8791 / H-0054, 24-hour hold | 1,045 | 455 | 0.900 | +40.33% | 29.43% |
+| 8791 / H-0055, 1.6% booked-entry stop | 1,060 | 457 | 0.879 | +36.37% | 27.06% |
+
+The finished two-year comparisons show lower Sharpe and ROI than H-0172. The half-hour flow and stop policy traded on more days and reduced drawdown, with a substantially weaker Sharpe. The favorable six-month result for the 3.4% stop did not carry over.
+
+Version 6.0.0 tests a rolling 60-minute shock evaluated on each completed half-hour bar. It keeps the longer return horizon while admitting shocks between the old hourly boundaries. The 24-hour prior return and the volatility of earlier rolling returns end before the entire shock window. The existing booked-position policy, cooldown and daily cap remain intact. This tests observation cadence independently of the shorter shock horizon that weakened prior half-hour candidates. Six initial hypotheses H-0188 through H-0193 were accepted in campaign C-d8e88f88d9755faf under `position-rolling-screen`.
+
+Rolling smaller shocks H-0189 led the six-month screen with 3.113 Sharpe, 443 positions across 158 entry days, +59.59% net ROI and 10.55% maximum drawdown. The four highest-Sharpe eligible configurations advanced unchanged as H-0194 through H-0197, campaign C-5240745963ea98af. The full runs and their saved specifications are under `position-rolling-full`.

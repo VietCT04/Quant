@@ -14,6 +14,7 @@ from .sharpe_search import BREAKOUT, FULL, SCREEN
 
 SPREAD = BREAKOUT | {"version": "4.0.0"}
 CONFIRMED = BREAKOUT | {"version": "5.0.0"}
+ROLLING = BREAKOUT | {"version": "6.0.0"}
 REFERENCE = dict(alignment=.07, depth=.05, fraction=.22, hold=168, market_floor=-.003,
                  side=1, sigma=3., slots=4, trail=.12)
 COMMON = dict(alignment=.035, depth=.022, fraction=.10, hold=24, market_floor=-.003,
@@ -52,15 +53,35 @@ DEMAND = [
     ("Half-hour demand, faster loss exit", dict(interval_minutes=30, depth=.0165, sigma=2.05, flow_floor=.02,
                                                 alignment=.052, hold=27, daily_entries=6, entry_stop=.028, fraction=.09)),
 ]
+EXITS = [
+    ("Hourly invalidate at 1.6%", dict(entry_stop=.016)),
+    ("Hourly invalidate at 3.4%", dict(entry_stop=.034)),
+    ("Hourly reject failures and hold winners one day", dict(entry_stop=.024, hold=24, trail=.06)),
+    ("Hourly strength and wider winner trail", dict(entry_stop=.025, hold=30, trail=.065, alignment=.035,
+                                                   depth=.017, sigma=2.2)),
+    ("Hourly pre-shock drift with longer winners", dict(entry_stop=.028, hold=24, trail=.06, drift_floor=.003,
+                                                     depth=.017, sigma=2.2)),
+]
+ROLLING_BASE = DEMAND_BASE | dict(interval_minutes=30)
+ROLLING_VARIANTS = [
+    ("Rolling hour, balanced", {}),
+    ("Rolling hour, smaller shocks", dict(depth=.016, sigma=2.55, alignment=.03, hold=18)),
+    ("Rolling hour, persistence", dict(depth=.018, sigma=2.4, alignment=.05, hold=22, trail=.055)),
+    ("Rolling hour, stronger surprise", dict(depth=.016, sigma=2.9, alignment=.02, hold=20, daily_entries=6)),
+    ("Rolling hour, steady market", dict(depth=.0165, sigma=2.3, alignment=.035, market_floor=-.0005, hold=20)),
+    ("Rolling hour, more capacity", dict(depth=.0165, sigma=2.35, fraction=.06, hold=14, daily_entries=6)),
+]
 
 
-def submit(port, folder, promote=(), *, control=True, bridge=False, confirmed=False):
+def submit(port, folder, promote=(), *, control=True, bridge=False, confirmed=False, exits=False, rolling=False):
     dataset = q.data.open(request(port, "/service")["coverage"]["source"])
     screen = q.data.select(dataset, start=SCREEN[0], end=SCREEN[1])
     selected = q.data.select(dataset, start=FULL[0], end=FULL[1]) if promote else screen
     fingerprint = q.data.fingerprint(selected)
-    base, variants = (DEMAND_BASE, DEMAND) if confirmed else (HOURLY, BRIDGE) if bridge else (COMMON, VARIANTS)
-    strategy = CONFIRMED if confirmed else SPREAD
+    base, variants = ((ROLLING_BASE, ROLLING_VARIANTS) if rolling else
+                      (DEMAND_BASE, EXITS) if exits else (DEMAND_BASE, DEMAND) if confirmed else
+                      (HOURLY, BRIDGE) if bridge else (COMMON, VARIANTS))
+    strategy = ROLLING if rolling else CONFIRMED if confirmed or exits else SPREAD
     rows = [(name, base | changes, strategy, None) for name, changes in variants] if not promote else []
     if promote:
         source_fingerprint = q.data.fingerprint(screen)
@@ -92,7 +113,8 @@ def submit(port, folder, promote=(), *, control=True, bridge=False, confirmed=Fa
              candidates=[{"kind": "native", "strategy": strategy, "parameters": parameters}])
         for name, parameters, strategy, origin in rows
     ]
-    round_name = "confirmed demand" if confirmed else "hourly follow-up" if bridge else "broader position days"
+    round_name = ("rolling hour" if rolling else "failed breakout exits" if exits else "confirmed demand" if confirmed else
+                  "hourly follow-up" if bridge else "broader position days")
     payload = {"campaign": f"Shock repricing / {round_name} / " + ("full" if promote else "screen"),
                "hypotheses": items}
     folder.mkdir(parents=True, exist_ok=False)
@@ -125,9 +147,13 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--bridge", action="store_true")
     mode.add_argument("--confirmed", action="store_true")
+    mode.add_argument("--exits", action="store_true")
+    mode.add_argument("--rolling", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(submit(args.port, args.out, args.promote, control=not (args.bridge or args.confirmed),
-                            bridge=args.bridge, confirmed=args.confirmed)), flush=True)
+    print(json.dumps(submit(args.port, args.out, args.promote,
+                            control=not (args.bridge or args.confirmed or args.exits or args.rolling),
+                            bridge=args.bridge, confirmed=args.confirmed, exits=args.exits, rolling=args.rolling)),
+          flush=True)
 
 
 if __name__ == "__main__":

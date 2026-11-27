@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,6 +11,7 @@ from research_strategies import shock_breakout_confirmed as confirmed
 from research_strategies import shock_breakout_distributed as distributed
 from research_strategies import shock_breakout_fast as fast
 from research_strategies import shock_breakout_managed as managed
+from research_strategies import shock_breakout_rolling as rolling
 
 
 @pytest.mark.parametrize("side", [1, -1])
@@ -119,3 +121,13 @@ def test_flow_filter_only_affects_entry_readiness_and_stop_uses_booked_price(mon
     orders = Orders(symbols)
     confirmed.trade(state, row, account, orders)
     assert [(intent.symbol, intent.kind) for intent in orders.items] == [("B", 0), ("A", 2)]
+
+
+def test_rolling_hour_observes_two_half_hours_and_lags_the_whole_shock():
+    p = {"interval_minutes": 30}
+    ordinary = distributed.prepare(p)
+    plan = rolling.prepare(p)
+    assert rolling.STRATEGY.orders is distributed.STRATEGY.orders
+    assert plan.decision_ticks == ordinary.decision_ticks == 360
+    for feature in ("impulse", "prior_trend", "prior_vol"):
+        assert json.loads(plan.features[feature].parameters_json)["periods"] == 2
