@@ -36,6 +36,7 @@ UTC_WEEKEND = {"id": "fixed_clock_turnover_handoff", "version": "1.1.0"}
 UTC_SEASONAL = {"id": "fixed_clock_turnover_handoff", "version": "1.2.0"}
 UTC_RISK = {"id": "fixed_clock_turnover_handoff", "version": "1.3.0"}
 UTC_FLOW = {"id": "fixed_clock_turnover_handoff", "version": "1.4.0"}
+UTC_TRAIL = {"id": "fixed_clock_turnover_handoff", "version": "1.5.0"}
 SIGNED_VARIANCE = {"id": "signed_variance_reversal", "version": "1.0.0"}
 CANDIDATES = [
     ("Relative momentum, wider exit band", dict(hold=48, slots=6)),
@@ -267,6 +268,23 @@ UTC_FLOW_CANDIDATES = [
     ("14 UTC quote confirmation, shorter risk window", dict(direction=0, fraction=.055, clock_window="14",
                                                             weekday_weight=.10, hold=6, stop=.023)),
 ]
+UTC_TRAIL_CANDIDATES = [
+    ("14 UTC protection after an initial gain", dict(direction=0, fraction=.05, clock_window="14", weekday_weight=.08)),
+    ("14 UTC protection after a small gain", dict(direction=0, fraction=.05, clock_window="14", weekday_weight=.08,
+                                                   arm_profit=.012, trail_gap=.008)),
+    ("14 UTC protection for larger gains", dict(direction=0, fraction=.05, clock_window="14", weekday_weight=.08,
+                                                arm_profit=.026, trail_gap=.016)),
+    ("14 UTC later protection with liquidity bias", dict(direction=0, fraction=.05, clock_window="14", weekday_weight=.12,
+                                                          arm_profit=.016, trail_gap=.01, trail_delay=3,
+                                                          min_quote=1_400_000., activity=1.38, chase=.026)),
+    ("14 UTC gain protection, wider holding", dict(direction=0, fraction=.05, clock_window="14", weekday_weight=.10,
+                                                   hold=10, arm_profit=.018, trail_gap=.01, trail_delay=2)),
+    ("Liquid 14 UTC, matched gain protection", dict(direction=0, fraction=.05, clock_window="14", weekday_weight=.20,
+                                                    min_quote=1_500_000., activity=1.38, chase=.025)),
+    ("Liquid 14 UTC, earlier gain protection", dict(direction=0, fraction=.05, clock_window="14", weekday_weight=.20,
+                                                    min_quote=1_500_000., activity=1.38, chase=.025,
+                                                    arm_profit=.012, trail_gap=.007)),
+]
 
 
 def run_wave(port, folder, candidates, *, full=False, mode="peer"):
@@ -295,6 +313,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
     seasonal = "Turnover relative to the same weekday may distinguish unusual demand from a regular weekday-to-weekend change."
     utc_risk = "Capping the size of previously volatile contracts may reduce portfolio variation without tightening the turnover signal."
     utc_flow = "Directional continuation may be more durable when observed aggressive quote flow confirms the entry."
+    utc_trail = "Observed intraday gains may reverse before a fixed exit. Trailing exits test whether only weak continuations should close early."
     family, selector, description = {
         "peer": ("Peer rotation", STRATEGY, None),
         "reclaim": ("Range reclaim", RECLAIM, reclaim_mechanism),
@@ -319,6 +338,7 @@ def run_wave(port, folder, candidates, *, full=False, mode="peer"):
         "seasonal": ("Same-weekday turnover normalization", UTC_SEASONAL, seasonal),
         "utc_risk": ("Observed volatility sizing for clocked turnover", UTC_RISK, utc_risk),
         "utc_flow": ("Quote pressure sizing for clocked turnover", UTC_FLOW, utc_flow),
+        "utc_trail": ("Clocked turnover with gain protection", UTC_TRAIL, utc_trail),
     }[mode]
     def mechanism(params):
         return description or REASONS[params.get("mode", "momentum")]
@@ -355,7 +375,8 @@ def main():
     mode = p.add_mutually_exclusive_group()
     for key in ("reclaim", "reference", "adaptive", "mark", "absorption", "pairs", "pair_breakout", "breadth",
                 "compression", "compression_context", "compression_capacity", "failed_relief", "defensive", "stress",
-                "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk", "utc_flow"):
+                "flow_size", "utc_handoff", "stress_btc", "variance", "weekend", "seasonal", "utc_risk",
+                "utc_flow", "utc_trail"):
         mode.add_argument("--" + key.replace("_", "-"), action="store_const", const=key, dest="family")
     p.set_defaults(family="peer")
     args = p.parse_args()
@@ -383,6 +404,7 @@ def main():
         "seasonal": (SEASONAL_CANDIDATES, UTC_SEASONAL),
         "utc_risk": (UTC_RISK_CANDIDATES, UTC_RISK),
         "utc_flow": (UTC_FLOW_CANDIDATES, UTC_FLOW),
+        "utc_trail": (UTC_TRAIL_CANDIDATES, UTC_TRAIL),
     }[args.family]
     rows = run_wave(args.port, args.out / "screen", [(name, params, None) for name, params in items],
                     mode=args.family)

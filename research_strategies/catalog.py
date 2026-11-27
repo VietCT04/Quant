@@ -11,6 +11,7 @@ from . import breadth_rebound, compression_breakout, compression_capacity, compr
 from . import defensive_rotation, flow_size_divergence
 from . import shock_stress, shock_stress_btc
 from . import utc_turnover_flow, utc_turnover_handoff, utc_turnover_risk, utc_turnover_seasonal, utc_turnover_weekend
+from . import utc_turnover_trail
 from . import signed_variance
 
 STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, scaling.STRATEGY,
@@ -28,4 +29,4 @@ STRATEGIES = (ema.STRATEGY, shock.STRATEGY, flow.STRATEGY, momentum.STRATEGY, sc
               defensive_rotation.STRATEGY, shock_stress.STRATEGY, flow_size_divergence.STRATEGY,
               utc_turnover_handoff.STRATEGY, shock_stress_btc.STRATEGY, signed_variance.STRATEGY,
               utc_turnover_weekend.STRATEGY, utc_turnover_seasonal.STRATEGY, utc_turnover_risk.STRATEGY,
-              utc_turnover_flow.STRATEGY)
+              utc_turnover_flow.STRATEGY, utc_turnover_trail.STRATEGY)
