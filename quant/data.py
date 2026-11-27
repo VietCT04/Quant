@@ -85,9 +85,10 @@ class Block:
         ):
             raise ValueError("Invalid block axes, coverage or availability")
         values = {}
+        uncovered = status > EMPTY
         for name, field in self.values.items():
             field = np.asarray(field, dtype=float)
-            if field.shape != shape or np.any(np.isfinite(field[status > EMPTY])):
+            if field.shape != shape or np.any(np.isfinite(field[uncovered])):
                 raise ValueError(f"{name} disagrees with block shape or coverage")
             values[name] = field
         object.__setattr__(self, "timestamps_ms", timestamps)
@@ -375,10 +376,13 @@ def resample(blocks, resolution):
         shape = (count, group, len(src.symbols))
         status = src.status.reshape(shape)
         pre = status == PRELISTING
-        unknown = (status == MISSING).any(axis=1) | (pre.any(axis=1) & ~pre.all(axis=1))
-        coverage = np.where((status == TRADED).any(axis=1), TRADED, EMPTY)
+        pre_all = pre.all(axis=1)
+        unknown = (status == MISSING).any(axis=1) | (pre.any(axis=1) & ~pre_all)
+        traded = status == TRADED
+        has_trade = traded.any(axis=1)
+        coverage = np.where(has_trade, TRADED, EMPTY)
         coverage[unknown] = MISSING
-        coverage[pre.all(axis=1)] = PRELISTING
+        coverage[pre_all] = PRELISTING
         coverage[(status == QUARANTINED).any(axis=1)] = QUARANTINED
         values = {}
         for name, field in src.values.items():
@@ -386,16 +390,15 @@ def resample(blocks, resolution):
             if name in FLOW:
                 y = a.sum(axis=1)
             elif name == "open":
-                first = np.argmax(status == TRADED, axis=1)
+                first = np.argmax(traded, axis=1)
                 y = np.take_along_axis(a, first[:, None, :], axis=1)[:, 0, :]
             elif name == "close":
                 y = a[:, -1, :].copy()
             elif name in {"high", "low", "max_trade_qty"}:
                 reducer = np.max if name != "low" else np.min
                 if name != "max_trade_qty":
-                    has_trade = (status == TRADED).any(axis=1)[:, None, :]
                     a = np.where(
-                        has_trade & (status == EMPTY),
+                        has_trade[:, None, :] & (status == EMPTY),
                         -np.inf if name == "high" else np.inf,
                         a,
                     )

@@ -33,6 +33,21 @@ A 100-configuration five-second benchmark completed 16.21M candidate cells in 8.
 
 Detailed old artifacts remain readable in Explorer. As before, changed runtime provenance makes an exact replay of an old summary explicitly incompatible with the current runtime. Running the recorded code revision remains the reproduction path for those summaries.
 
+## General strategies reading directly from Parquet
+
+Production batch 64 measured 1.30M shared bars/s. It used seven registered hourly strategies, the six-month screening window, and no prepared cache. The warm-cache shock measurements above used a different workload and execution path.
+
+A matched direct-Parquet benchmark reused the displayed-return-roll configurations on Liquid 50 from 2026-05-25 through 2026-07-05 UTC, with the original 40-hour warm-up. Each run processed 31,455,904 observed bars. Both builds used the same native library, 12 CPU slots, a 2 GiB memory budget and the same candidate settings. These single-run measurements include data, features, portfolio steps and report publication. The operating system file cache was uncontrolled.
+
+| Workload | Previous wall time | Updated wall time | Previous shared bars/s | Updated shared bars/s | Peak working set, previous → updated |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Seven candidates | 27.34 s | 13.51 s | 1.15M | 2.33M | 1,965 → 1,948 MiB |
+| One candidate | 21.01 s | 10.55 s | 1.50M | 2.98M | 1,778 → 1,959 MiB |
+
+The native reports matched exactly for both comparisons. The engine reads ahead on spare CPU slots for single-candidate waves. Higher-timeframe graphs aggregate only the raw inputs they depend on, reuse symbol-wide rolling kernels, and materialize aligned values at decision rows for summary callbacks that have no warm-up handler. Audits still receive dense feature traces. Compatible portfolios share the observed warm-up mask while retaining independent strategy state and booked inventory. The reported rate counts each observed market bar once per batch. The single-candidate peak working set increased with parallel read-ahead.
+
+The production repeat accepted its seven jobs in 0.82 s and published all reports through the existing worker. It processed the same 154,737,785 observed bars in 59.59 s (2.60M bars/s), compared with 119.17 s (1.30M bars/s) in batch 64. All seven complete native metrics and diagnostic reports matched exactly. The previous production run shared the machine with other research work. The 41-day comparison above provides a separate like-for-like check. The result specifications and reports are available through [verification batch 66](http://127.0.0.1:8765/api/batches/66) and [campaign C-67703c8eb08b52d4](http://127.0.0.1:8765/api/campaigns/C-67703c8eb08b52d4). Local benchmark evidence is under `bench-data/order-throughput/hourly`.
+
 ## Reproduce
 
 Submit the selected order tranche through the Control Center with protocol evaluation.prepared_cache set to true. Run it against a compatible prepared cache and keep the CPU budget high enough for concurrent candidate and read workers.

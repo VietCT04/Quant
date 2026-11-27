@@ -121,14 +121,16 @@ def test_higher_features_observe_only_completed_frames():
     block = Block(timestamps, ("BTCUSDT",), timestamps + 5000, np.zeros_like(close, dtype="u1"),
                   {"close": close}, 5000, {"close": "USDT/base"})
     expression = q.features.expression("quant.ts.lag", "close", periods=1, units="USDT/base")
-    def stream(source):
+    def stream(source, *, lazy=False):
         sampler = CompletedFeatures({3: {"prior": expression}, 2: {"other": expression}}, 5000, 2**20, None)
-        return np.concatenate([sampler.advance(_slice(source, i, i + 2))["prior"]
+        return np.concatenate([sampler.advance(_slice(source, i, i + 2), lazy=lazy)["prior"][:]
                                for i in range(0, len(close), 2)]).ravel()
     baseline = stream(block)
     np.testing.assert_allclose(baseline, [np.nan] * 5 + [12] * 3 + [15] * 3 + [18])
+    np.testing.assert_array_equal(stream(block, lazy=True), baseline)
     close[8:] = 10000
     np.testing.assert_equal(stream(block)[:8], baseline[:8])
+    np.testing.assert_equal(stream(block, lazy=True)[:8], baseline[:8])
 
 
 

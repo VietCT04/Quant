@@ -514,6 +514,19 @@ def test_blocks_resampling_and_labels():
     assert_allclose(q.evaluate.research_values(late)[0, 0], .2)
 
 
+def test_rolling_matrices_match_each_symbol_with_missing_observations():
+    rng = np.random.default_rng(291)
+    values = rng.normal(size=(129, 4))
+    values[::7, 0] = np.nan
+    values[::5, 1] = np.inf
+    values[::9, 2] = -np.inf
+    values[:, 3] = np.nan
+    for operation in (q.ts.rolling_sum, q.ts.rolling_mean, q.ts.rolling_median, q.ts.rolling_min,
+                      q.ts.rolling_max, q.ts.rolling_variance, q.ts.rolling_std):
+        expected = np.column_stack([operation(col, 13, min_periods=3) for col in values.T])
+        np.testing.assert_array_equal(operation(values, 13, min_periods=3), expected)
+
+
 def test_resample_ohlcv_and_unknown():
     t = np.array([0, 5000, 10000, 15000])
     values = {

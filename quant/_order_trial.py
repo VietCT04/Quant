@@ -78,8 +78,11 @@ class OrderTrial:
         begin = first
         warm = decision.plan.warmup_bars
         shared = getattr(block, "_order_readiness", None)
+        shared_observed = getattr(block, "_observed_warmup", None)
         if shared is None:
-            valid, decision.last_valid_run = observed_warmup(status, market[:, :, 0], decision.last_valid_run, warm)
+            valid = shared_observed
+            if valid is None:
+                valid, decision.last_valid_run = observed_warmup(status, market[:, :, 0], decision.last_valid_run, warm)
             observed = valid[first:]
             qualified = None
         else:
@@ -113,10 +116,15 @@ class OrderTrial:
         base = int((starts[0] - self.start) // block.interval_ms)
         offset = first + (-(base + first) % cadence)
         if qualified is None:
-            qualified = observed.copy()
+            readiness_step = 1 if self.compiled else cadence
+            readiness_start = first if self.compiled else offset
+            qualified = observed[readiness_start-first::readiness_step].copy()
             for name in decision.plan.features:
-                qualified &= np.isfinite(block.values[name][first:])
-        counts = np.count_nonzero(~qualified[offset-first::cadence], axis=0)
+                qualified &= np.isfinite(block.values[name][readiness_start::readiness_step])
+            ready_at_decision = qualified[offset-first::cadence] if self.compiled else qualified
+        else:
+            ready_at_decision = qualified[offset-first::cadence]
+        counts = np.count_nonzero(~ready_at_decision, axis=0)
         for name, count in zip(self.symbols, counts):
             if count:
                 self.skipped[name] += int(count)
@@ -136,13 +144,12 @@ class OrderTrial:
             self.flush()
             return 0, engine_time, perf_counter() - clock
 
-        for row in range(offset, len(starts), cadence):
+        for row, ready in zip(range(offset, len(starts), cadence), ready_at_decision):
             run(row + 1)
             started = perf_counter()
             equity = engine.equity()
             positions = engine.positions()
             positions.flags.writeable = False
-            ready = qualified[row - first]
             portfolio = Portfolio(self.book_clock, positions, float(equity["equity"]),
                                   float(equity["wallet"]), float(equity["available"]), tuple(self.outcomes),
                                   trial.settings.leverage, tuple(s for s, ok in zip(self.symbols, ready) if ok))
@@ -155,7 +162,7 @@ class OrderTrial:
         if begin < len(starts):
             run(len(starts))
         if first < len(starts):
-            if first:
+            if first and decision.trace is not None:
                 from .data import _slice
                 # The decision frame is a proxy; the runner supplies the concrete projected block.
                 block = _slice(decision._view(block), first, None)

@@ -41,7 +41,7 @@ export function Worker({ service }: { service: Service }) {
     {sampled !== null && <div className="worker-progress"><div>Market range processed <span>{num(sampled * 100, 1)}%</span></div><progress value={sampled} max={1} aria-label="Market range processed" /></div>}
     <dl className="worker-metrics">
       <div><dt><Layers size={15} /> Worker allocation</dt><dd>{worker.phase === 'processing' ? num(worker.profile?.workers) : '—'} <small>/ {budgets.cpu_limit} CPU</small></dd></div>
-      <div><dt><Gauge size={15} /> {worker.phase === 'processing' ? 'Current throughput' : 'Last batch throughput'}</dt><dd>{num(worker.bars_per_second ?? last_batch?.bars_per_second)} <small>bars/s</small></dd></div>
+      <div><dt title="Observed market bars per wall-clock second, counted once across all candidates in the batch"><Gauge size={15} /> {worker.phase === 'processing' ? 'Current throughput' : 'Last batch throughput'}</dt><dd>{num(worker.bars_per_second ?? last_batch?.bars_per_second)} <small>shared bars/s</small></dd></div>
       <div><dt><Database size={15} /> Prepared cache</dt><dd>{gib(resources.cache_bytes)} {last_batch?.cache_reads != null && <small>· {num(last_batch.cache_reads)} reads</small>}</dd></div>
       <div><dt><Layers size={15} /> Shared feature nodes</dt><dd>{num(profile?.feature_nodes)}</dd></div>
     </dl>

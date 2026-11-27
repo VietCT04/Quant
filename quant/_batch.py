@@ -21,6 +21,7 @@ from simulator.reporting import Logs, performance, record
 
 from . import features
 from ._core import array
+from ._order_trial import observed_warmup
 from ._prepared import prepared
 from ._prefetch import prefetch
 from ._resources import hardware, worker_count
@@ -366,6 +367,10 @@ def run_batch(
     worker_limit = worker_count(workers, cpu_limit=cpu_limit, tasks=len(candidates))
     if workers == "auto" and len(candidates) < 32:
         worker_limit = min(worker_limit, 4)
+    cpu_slots = hardware()["usable_cpus"]
+    if cpu_limit is not None:
+        cpu_slots = min(cpu_limit, cpu_slots)
+    spare = cpu_slots - worker_limit
     results, failures = {}, {}
     profile = dict(
         workers=worker_limit,
@@ -426,7 +431,7 @@ def run_batch(
                 trace_bytes = 8 * max((c.trace_width for c in wave), default=0) if logging == "audit" else 0
                 per_cell = (
                     128 + 24 * len(extra_fields) + 32 * len(graph)
-                    + ((240 + 48 * len(extra_fields)) if ordered and worker_limit > 1 else 0)
+                    + ((240 + 48 * len(extra_fields)) if ordered and spare > 0 else 0)
                     + live * ((1024 if logging in {"standard", "audit"} else 48) + 3 * trace_bytes)
                 )
                 ledger_limit = min(2 << 20, memory_cap // (16 * len(wave))) if ordered and logging == "summary" else 0
@@ -445,8 +450,7 @@ def run_batch(
             feed.status_counts = np.zeros_like(template.status_counts)
             feed.profile = dict.fromkeys(template.profile, 0.0)
             feed.read_threads = cpu_limit is None and not ordered
-            spare = (cpu_limit if cpu_limit is not None else hardware()["usable_cpus"]) - worker_limit
-            overlap_reader = ordered and worker_limit > 1 and spare > 0
+            overlap_reader = ordered and spare > 0
             if overlap_reader:
                 feed.read_workers = min(n, 8, spare)
             archive = None
@@ -502,6 +506,7 @@ def run_batch(
             sampled = defaultdict(dict)
             keys = {}
             feature_errors = {}
+            previous_valid_run = np.zeros(n, dtype=np.int64)
 
             def feature_failed(node, error):
                 feature_errors[node] = f"{type(error).__name__}: {error}"
@@ -518,6 +523,15 @@ def run_batch(
                             sampled[period][alias] = node
                 except Exception as error:
                     failures[c.name] = f"{type(error).__name__}: {error}"
+            share_observed = ordered and all(
+                trial.candidate.decision.plan.warmup_bars == warmup for trial in trials.values()
+            )
+            lazy_higher = ordered and logging == "summary" and all(
+                not trial.ordered.compiled and trial.candidate.decision.strategy.warm is None
+                and trial.candidate.decision.receipt["decision_ticks"] >= 8
+                and trial.candidate.decision.trace is None
+                for trial in trials.values()
+            )
             profile["feature_nodes"] += len(graph)
             clock = perf_counter()
             # Extended fields share the native feed's projected Parquet scan.
@@ -650,7 +664,7 @@ def run_batch(
                         profile["feature_seconds"] += feature_time
                         profile["market_seconds"] += market_time
                         clock = perf_counter()
-                    higher = aligned_features.advance(base) if aligned_features.groups else {}
+                    higher = aligned_features.advance(base, lazy=lazy_higher) if aligned_features.groups else {}
                     if fused is not None:
                         profile["fused_feature_blocks"] += 1
                         masks = {}
@@ -681,8 +695,11 @@ def run_batch(
                             trials.pop(name).close()
                     if not trials:
                         break
-                    profile["feature_seconds"] += perf_counter() - clock
                     starts, market, status = current[:3]
+                    observed = None
+                    if share_observed and fused is None and len(wave) > 1:
+                        observed, previous_valid_run = observed_warmup(status, market[:, :, 0], previous_valid_run, warmup)
+                    profile["feature_seconds"] += perf_counter() - clock
                     profile["market_blocks"] += 1
                     profile["scheduled_cells"] += status.size
                     profile["observed_bars"] += int(np.count_nonzero(status <= 1))
@@ -709,6 +726,8 @@ def run_batch(
                                 block = _DecisionFrame(base, values, units)
                                 if native:
                                     block._order_readiness = readiness[name]
+                                elif observed is not None:
+                                    block._observed_warmup = observed
                             timing = trial.advance(
                                 starts,
                                 market,

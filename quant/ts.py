@@ -141,9 +141,14 @@ def forward_fill(x, *, limit):
 def _rolling(method, description):
     def apply(x, window, *, min_periods=None, interval_ms=None):
         n, minimum = _window(window, min_periods, interval_ms)
-        return _map(
-            x, lambda a: getattr(_series(a), method)(n, min_samples=minimum).to_numpy()
-        )
+        x = time_array(x)
+        if x.ndim == 1:
+            return getattr(_series(x), method)(n, min_samples=minimum).to_numpy()
+        if not x.shape[1]:
+            return x.copy()
+        frame = pl.DataFrame(np.where(np.isfinite(x), x, np.nan), orient="row")
+        operation = getattr(pl.all().fill_nan(None), method)(n, min_samples=minimum)
+        return frame.select_seq(operation).to_numpy()
 
     apply.__doc__ = description
     return apply

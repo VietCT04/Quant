@@ -179,7 +179,10 @@ class MarketDataFeed:
                     if has_prelisting:
                         state[:int(np.searchsorted(starts, self.listing[i] - self.step, side="right"))] = PRELISTING
                     if table is not None:
-                        offsets = (table["timestamp_ms"].to_numpy() - lo) // self.step
+                        times = table["timestamp_ms"].to_numpy()
+                        dense = (not (self.completed_clock and (has_quarantine or has_prelisting))
+                                 and len(times) == ticks and np.array_equal(times, starts))
+                        offsets = slice(None) if dense else (times - lo) // self.step
                         close, vol, quote, empty = (table[name].to_numpy() for name in FIELDS)
                         allowed = None
                         if self.completed_clock and (has_quarantine or has_prelisting):
@@ -190,7 +193,10 @@ class MarketDataFeed:
                         values[i, offsets, 1] = np.divide(quote, vol, out=np.full_like(vol, np.nan), where=vol > 0)
                         values[i, offsets, 2] = vol
                         for name, projection in extras.items():
-                            column = table[name].to_numpy()
+                            column = (
+                                quote if name == "quote_volume" and allowed is None
+                                else table[name].to_numpy()
+                            )
                             projection[i, offsets] = column if allowed is None else column[allowed]
                     if self.aux and state[-1] != PRELISTING:
                         self._fill_marks(symbol, starts, clock, minute_keys, minute_index, values[i, :, 3])
