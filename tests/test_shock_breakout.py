@@ -6,6 +6,7 @@ import pytest
 from quant.strategy import Portfolio
 from quant.trading import Orders
 from research_strategies import shock_breakout as breakout
+from research_strategies import shock_breakout_managed as managed
 
 
 @pytest.mark.parametrize("side", [1, -1])
@@ -37,3 +38,26 @@ def test_breakout_ranks_shocks_and_trails_booked_position(side):
     qty[0] = 0
     impulse[0] = side * .06
     assert not decide(4, spot, impulse)
+
+
+def test_managed_budget_caps_entry_and_preserves_close(monkeypatch):
+    params = {k: v.default for k, v in managed.STRATEGY.parameters.items()} | {
+        "drawdown_sensitivity": 2., "vol_target": .01, "volume_budget": .25,
+    }
+    state = managed.initialize(params, ("A", "B"), None)
+    state[1]["peak"] = 10_000.
+    row = SimpleNamespace(symbols=("A", "B"), values={
+        "prior_vol": [[.02, .02]], "prior_turnover": [[720_000., 720_000.]],
+    })
+    account = Portfolio(5000, {"qty": np.zeros(2)}, 8_000.)
+    orders = Orders(row.symbols)
+
+    def plan(inner, row, account, orders):
+        assert inner[0]["fraction"] == pytest.approx(params["fraction"] * .6)
+        orders.buy("A", notional=1000.)
+        orders.close("B")
+        return {}
+
+    monkeypatch.setattr(breakout, "trade", plan)
+    managed.trade(state, row, account, orders)
+    assert [(intent.symbol, intent.kind, intent.size) for intent in orders.items] == [("A", 0, 250.), ("B", 2, 0.)]
