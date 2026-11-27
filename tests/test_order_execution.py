@@ -168,5 +168,6 @@ def test_order_trial_warmup_state_isolation_and_callback_feedback(market, tmp_pa
     assert a["execution_diagnostics"]["filled"] == 2
     assert a["execution_diagnostics"]["terminal"] == 1
     assert a["completed_positions"] == 1
+    assert a["position_lifecycles"]["entries_by_utc_day"] == [[0, 1]]
     assert a["bar_range_ms"] == [10_000, market.end]
     assert a["sharpe"] is None

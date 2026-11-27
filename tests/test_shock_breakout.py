@@ -6,6 +6,7 @@ import pytest
 from quant.strategy import Portfolio
 from quant.trading import Orders
 from research_strategies import shock_breakout as breakout
+from research_strategies import shock_breakout_distributed as distributed
 from research_strategies import shock_breakout_fast as fast
 from research_strategies import shock_breakout_managed as managed
 
@@ -74,3 +75,21 @@ def test_half_hour_breakout_preserves_wall_clock_warmup():
     assert half_hour.features["impulse"] == hourly.features["impulse"]
     assert half_hour.features["prior_trend"] != hourly.features["prior_trend"]
     assert half_hour.features["prior_vol"] != hourly.features["prior_vol"]
+
+
+def test_distributed_entry_quota_resets_at_utc_midnight(monkeypatch):
+    params = {k: v.default for k, v in distributed.STRATEGY.parameters.items()} | {"daily_entries": 1}
+    symbols = ("A", "B")
+    state = distributed.initialize(params, symbols, None)
+
+    def planned(inner, row, account, orders):
+        orders.buy("A", notional=50)
+        orders.close("B")
+        return {}
+
+    monkeypatch.setattr(breakout, "trade", planned)
+    for now, kinds in ((0, [0, 2]), (distributed.DAY - 5_000, [2]), (distributed.DAY, [0, 2])):
+        row = SimpleNamespace(symbols=symbols)
+        orders = Orders(symbols)
+        distributed.trade(state, row, Portfolio(now, {"qty": np.zeros(2)}, 10_000.), orders)
+        assert [order.kind for order in orders.items] == kinds

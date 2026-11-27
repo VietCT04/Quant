@@ -183,6 +183,7 @@ def order_lifecycles(folder, symbols, positions, end, *, records=None):
 
     net, duration, returns = [], [], []
     details = {}
+    entries_by_day = {}
     paths = [folder / f"{table}.parquet" for table in ("fills", "funding")]
 
     def uncompressed(path):
@@ -204,6 +205,9 @@ def order_lifecycles(folder, symbols, positions, end, *, records=None):
             fills, flows = (group[(i,)].iter_rows(named=True) if (i,) in group else () for group in grouped)
         entries, _, _ = reconstruct(symbol, fills, flows, record(positions[i]), end, detail=False)
         closed = [row for row in entries if row["state"] == "closed"]
+        for row in closed:
+            day = row["entry_ms"] // DAY * DAY
+            entries_by_day[day] = entries_by_day.get(day, 0) + 1
         net.extend(row["net_pnl"] for row in closed)
         duration.extend(row["duration_ms"] for row in closed)
         returns.extend(row["return_on_opening_notional"] for row in closed)
@@ -212,6 +216,7 @@ def order_lifecycles(folder, symbols, positions, end, *, records=None):
     wins, losses = pnl[pnl > 0], pnl[pnl < 0]
     counts, edges = np.histogram(pnl, bins=20) if len(pnl) else ([], [])
     return {"count": len(pnl), "wins": len(wins), "losses": len(losses),
+            "entries_by_utc_day": [[day, count] for day, count in sorted(entries_by_day.items())],
             "profit_factor": float(wins.sum() / -losses.sum()) if len(losses) else None,
             "win_rate": len(wins) / len(pnl) if len(pnl) else None,
             "average_win": float(wins.mean()) if len(wins) else None,
