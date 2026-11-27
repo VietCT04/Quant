@@ -168,3 +168,24 @@ The broader basket's six-month lead did not carry over to two years, and the two
 H-0110 sets the two-year comparison at 1.5669 daily net Sharpe, 184 completed positions and +1,062.93% net ROI. The owner asked to improve both Sharpe and completed position count. Ten hourly candidates preserve the positive prior-trend and market filters while testing wider inventory capacity, lower absolute shock hurdles, tighter exits, and shorter holding limits. They were submitted as H-0119 through H-0128 on port 8765. A separate five-candidate wave tests whether observing half-hour shocks admits more qualifying moves. Version 3.0.0 reuses the booked-position policy and preserves the 24-hour prior trend, 48-hour volatility horizon and 50-hour warm-up. Volatility and trend inputs are lagged one completed half-hour observation. Both waves use base V2 costs, 1× leverage and Liquid 50.
 
 All ten hourly six-month variants closed more positions than H-0110's screen, ranging from 87 to 120 versus 82. Six strength slots H-0121 led with 3.148 Sharpe, 101 positions, and +277.57% net ROI. Six fixed candidates advanced unchanged as H-0129 through H-0134. The half-hour screen is H-0040 through H-0044 on port 8791. The six-month and full-history receipts are stored separately under `sharpe-frequency-screen`, `sharpe-frequency-full`, and the corresponding `sharpe-half-hour-*` directories.
+
+The five half-hour screens closed 133–182 positions. H-0041 led that wave with 2.792 Sharpe, 165 positions and +389.73% net ROI. H-0041, H-0043 and H-0042 advanced unchanged as H-0045 through H-0047 on port 8791. None of the half-hour screens beat H-0110's six-month Sharpe, so the full runs test whether higher frequency improves behavior on the earlier history.
+
+All six hourly full-history variants closed 205–288 positions. The strongest, H-0131, closed 247 positions with 1.5616 Sharpe, +625.87% net ROI and 43.07% maximum drawdown. This is more active and has lower drawdown than H-0110. Its Sharpe remained slightly below H-0110's 1.5669. Three half-hour full-history candidates closed 313–388 positions. Their Sharpe ranged from 0.8910 to 1.0638 and their net ROI from +120.02% to +237.91%. Earlier observation alone did not preserve the hourly strategy's risk-adjusted returns.
+
+The next hourly wave retains H-0131's 5% absolute shock and 4% prior-strength design as its starting point. It varies prior strength, market direction, the volatility-scaled hurdle and holding policy. This tests whether smaller shocks provide a workable increase in activity when qualified by stronger pre-shock evidence. The eight six-month hypotheses are H-0135 through H-0142, filed under `sharpe-quality-screen`. Select positive screens by Sharpe after requiring more completed positions than H-0110's screen, then compare each frozen policy over the two-year archive.
+
+Five advanced as H-0143 through H-0147 under C-2a49718fed71f88d. Three improved both full-history Sharpe and completed positions versus H-0110.
+
+| Two-year hypothesis | Net Sharpe | Completed positions | Net ROI | Maximum drawdown |
+| --- | ---: | ---: | ---: | ---: |
+| H-0110, comparison | 1.5669 | 184 | +1,062.93% | 56.05% |
+| H-0143, moderate shock score and stronger prior trend | 1.6645 | 231 | +577.00% | 42.05% |
+| H-0144, stronger shock surprise | 1.6659 | 197 | +702.40% | 46.01% |
+| H-0145, more time for a qualified shock | 1.5755 | 243 | +576.10% | 37.14% |
+| H-0146, smaller strength entries | 1.4644 | 258 | +358.80% | 38.36% |
+| H-0147, quiet market and strong trend | 1.4401 | 195 | +452.34% | 43.00% |
+
+H-0143 (job `e8e76a0b62f94901b7a1cc549f723b02`) offers 47 more completed positions than H-0110, nearly the same Sharpe as H-0144, and less drawdown. It admits 5% hourly shocks with a relative score of at least 3 and a 7% prior 24-hour gain. It allows four positions at 22% of equity per entry, uses a 12% trailing exit and sets a seven-day expiry. The first 18 months grew equity to 16,166.45 USDT, and terminal equity was 67,699.79 USDT. The top contributor was JCTUSDT at 13,419.39 USDT, about 23% of full-period net profit. The first 18 months still contributed a small share of the gain. Recomputing terminal equity from native gross P&L, cost and funding fields reconciled all three improving runs. The five-candidate batch took 273.55 s and sampled approximately 2.48 GiB of worker RSS during the run. Results are under `sharpe-quality-full`. [H-0143 result](http://127.0.0.1:8765/api/hypotheses/H-0143/results)
+
+H-0148's nine-day diagnostic and exact replay H-0149 reconciled accounting and all 17 ordinary fills to audited opens, modeled prices and fees. Two exceeded entire observed bar volume, and the largest reached 82.21 times the bar's traded notional. This short window began with a fresh wallet. It provides evidence of an unresolved execution-capacity constraint even with smaller allocations. [Exact audit](http://127.0.0.1:8765/api/hypotheses/H-0149/results)

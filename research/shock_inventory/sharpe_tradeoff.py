@@ -67,9 +67,28 @@ FAST_VARIANTS = [
     ("Half-hour strength, faster recycling", dict(depth=.045, fraction=.23, slots=4, hold=96, trail=.095),
      "A shorter holding limit and closer trail release capital for new qualifying shocks."),
 ]
+QUALITY_BASE = FREQUENCY_BASE | dict(depth=.05, alignment=.04, slots=4, fraction=.22)
+QUALITY_VARIANTS = [
+    ("Stronger prior trend", dict(alignment=.07),
+     "A modestly stronger pre-shock trend can remove weak breakouts while preserving trade count."),
+    ("Quiet market, strong trend", dict(market_floor=0.),
+     "Weak broad markets may explain losses from smaller qualifying shocks."),
+    ("Allow moderate market pullbacks", dict(market_floor=-.006, alignment=.06),
+     "Persistent prior demand may support a larger set of shocks during an ordinary market pullback."),
+    ("Stronger shock surprise with strength", dict(sigma=4.0),
+     "A higher volatility-adjusted hurdle can retain the most informative 5% shocks."),
+    ("Moderate surprises with strong trend", dict(sigma=3., alignment=.07),
+     "Prior strength can substitute for a higher short-window shock score."),
+    ("Smaller strength entries", dict(fraction=.17, slots=5),
+     "Reduce single-name volatility contribution while reserving capacity for more positions."),
+    ("Longer time for a qualified move", dict(hold=216, trail=.135, fraction=.20),
+     "Emphasize prior strength and give winners more time to compound."),
+    ("Stronger trend with shorter hold", dict(hold=120, alignment=.055, trail=.11),
+     "Faster capital recycling can preserve count while a tighter trend gate filters the weaker entries."),
+]
 
 
-def submit(port, output, promote, *, managed=False, frequency=False, fast=False):
+def submit(port, output, promote, *, managed=False, frequency=False, fast=False, quality=False):
     strategy = FAST if fast else MANAGED if managed else BREAKOUT
     dataset = q.data.open(request(port, "/service")["coverage"]["source"])
     screen = q.data.select(dataset, start=SCREEN[0], end=SCREEN[1])
@@ -92,8 +111,9 @@ def submit(port, output, promote, *, managed=False, frequency=False, fast=False)
                 raise ValueError(f"{key} has incompatible frozen strategy metadata")
             items.append((h["name"], spec["parameters"], f"Measure the unchanged {key} policy over the full archive.", job["id"]))
     else:
-        base = FREQUENCY_BASE if frequency or fast else BASE
-        variants = FAST_VARIANTS if fast else FREQUENCY_VARIANTS if frequency else MANAGED_VARIANTS if managed else VARIANTS
+        base = QUALITY_BASE if quality else FREQUENCY_BASE if frequency or fast else BASE
+        variants = (QUALITY_VARIANTS if quality else FAST_VARIANTS if fast else
+                    FREQUENCY_VARIANTS if frequency else MANAGED_VARIANTS if managed else VARIANTS)
         items = [(name, base | changes, mechanism, None) for name, changes, mechanism in variants]
     protocol = dict(start=selected.start, end=selected.end, universe=selected.symbols,
                     dataset_fingerprint=q.data.fingerprint(selected), seed=716, costs={})
@@ -102,12 +122,13 @@ def submit(port, output, promote, *, managed=False, frequency=False, fast=False)
              definition="Vary concentration, trailing exits and holding time of the frozen upside shock policy.",
              protocol=protocol | {"evaluation": {"research_window": "full_history" if promote else "six_month",
                                                 "sharpe_tradeoff": True,
-                                                "baseline_hypothesis": "H-0110" if frequency or fast else "H-0097",
+                                                "baseline_hypothesis": "H-0110" if frequency or fast or quality else "H-0097",
                                                 "origin_job": job}},
              candidates=[{"kind": "native", "strategy": strategy, "parameters": params}])
         for name, params, mechanism, job in items
     ]
-    tag = "half-hour" if fast else "frequency" if frequency else "managed" if managed else "fixed"
+    tag = ("shock quality" if quality else "half-hour" if fast else
+           "frequency" if frequency else "managed" if managed else "fixed")
     spec = {"campaign": f"Shock / Sharpe trade-off / {tag} / " + ("full" if promote else "screen"),
             "hypotheses": hypotheses}
     output.mkdir(parents=True, exist_ok=False)
@@ -126,9 +147,10 @@ def main():
     mode.add_argument("--managed", action="store_true")
     mode.add_argument("--frequency", action="store_true")
     mode.add_argument("--fast", action="store_true")
+    mode.add_argument("--quality", action="store_true")
     args = parser.parse_args()
     print(json.dumps(submit(args.port, args.out, args.promote, managed=args.managed,
-                            frequency=args.frequency, fast=args.fast)), flush=True)
+                            frequency=args.frequency, fast=args.fast, quality=args.quality)), flush=True)
 
 
 if __name__ == "__main__":
