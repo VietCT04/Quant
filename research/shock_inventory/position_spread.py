@@ -29,14 +29,23 @@ VARIANTS = [
     ("Quarter-hour extra diversification", dict(interval_minutes=15, depth=.013, fraction=.075, slots=10,
                                                  daily_entries=8, hold=18, trail=.045)),
 ]
+HOURLY = COMMON | dict(interval_minutes=60, depth=.02, sigma=2.75, hold=18, daily_entries=5)
+BRIDGE = [
+    ("Hourly lower surprise", dict(sigma=2.35)),
+    ("Hourly smaller absolute shock", dict(depth=.016, sigma=2.55, alignment=.03)),
+    ("Hourly more moderate shocks in a steady market", dict(depth=.017, sigma=2.30, market_floor=-.0015)),
+    ("Hourly broader eligibility with smaller risk", dict(depth=.019, sigma=2.35, alignment=.025,
+                                                              fraction=.075, slots=10, hold=16)),
+]
 
 
-def submit(port, folder, promote=(), *, control=True):
+def submit(port, folder, promote=(), *, control=True, bridge=False):
     dataset = q.data.open(request(port, "/service")["coverage"]["source"])
     screen = q.data.select(dataset, start=SCREEN[0], end=SCREEN[1])
     selected = q.data.select(dataset, start=FULL[0], end=FULL[1]) if promote else screen
     fingerprint = q.data.fingerprint(selected)
-    rows = [(name, COMMON | changes, SPREAD, None) for name, changes in VARIANTS] if not promote else []
+    base, variants = (HOURLY, BRIDGE) if bridge else (COMMON, VARIANTS)
+    rows = [(name, base | changes, SPREAD, None) for name, changes in variants] if not promote else []
     if promote:
         source_fingerprint = q.data.fingerprint(screen)
         for key in promote:
@@ -67,7 +76,8 @@ def submit(port, folder, promote=(), *, control=True):
              candidates=[{"kind": "native", "strategy": strategy, "parameters": parameters}])
         for name, parameters, strategy, origin in rows
     ]
-    payload = {"campaign": "Shock repricing / broader position days / " + ("full" if promote else "screen"),
+    round_name = "hourly follow-up" if bridge else "broader position days"
+    payload = {"campaign": f"Shock repricing / {round_name} / " + ("full" if promote else "screen"),
                "hypotheses": items}
     folder.mkdir(parents=True, exist_ok=False)
     (folder / "spec.json").write_text(json.dumps(payload, indent=2), encoding="utf8")
@@ -96,8 +106,9 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--promote", nargs="+", default=[])
+    parser.add_argument("--bridge", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(submit(args.port, args.out, args.promote)), flush=True)
+    print(json.dumps(submit(args.port, args.out, args.promote, control=not args.bridge, bridge=args.bridge)), flush=True)
 
 
 if __name__ == "__main__":

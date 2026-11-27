@@ -195,3 +195,28 @@ H-0148's nine-day diagnostic and exact replay H-0149 reconciled accounting and a
 The owner requested at least 1,000 completed positions over two years, with entries distributed across more days. The strategy remains a long shock breakout with prior trend, market direction and volatility-adjusted eligibility. Version 4.0.0 tests 15-, 30-, and 60-minute completed bars, more concurrent slots with smaller allocations, shorter holding periods, and at most five to eight submitted entries per UTC day. The quota leaves exit orders untouched. The strategy does not force a trade on idle days. All nine six-month candidates use Liquid 50, 1× leverage and base V2 costs. They are H-0150 through H-0158 in C-996f3856b65e1110.
 
 The native report now counts the first booked entries of completed position lifecycles by UTC day. Time dispersion is measured by distinct entry days and the fraction of all positions opened on the busiest ten dates. Counts reconcile exactly to completed positions. Archived metrics remain readable. A frozen exact replay from the earlier reporting runtime still requires that runtime. Re-run H-0143 with the same strategy and settings to obtain its comparable entry-day distribution and check once that the reporting addition did not change its metrics. Current specifications, receipts and evidence are under `data/research/shock-inventory/position-spread-*`.
+
+The six-month wave closed 298–792 positions on 132–173 distinct entry days. The hourly relative-surprise candidate H-0151 led screening Sharpe at 3.804 with 298 positions on 132 days, +110.86% net ROI and 17.70% maximum drawdown. The 15-minute extra-diversification candidate H-0158 closed 792 positions on 173 days at 0.730 Sharpe and +10.37% net ROI. Five unchanged candidates advanced as H-0159 through H-0163, including the four highest-Sharpe eligible screens and the strongest by day coverage and count. H-0164 repeats H-0143 as the reference. Full archive campaign C-fd7070458d3ee9f0 is independent of the submitting session.
+
+| Two-year candidate | Completed positions | UTC entry days | Net Sharpe | Net ROI | Maximum drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| H-0164, H-0143 reference | 231 | 182 | 1.665 | +577.00% | 42.05% |
+| H-0159, hourly relative surprises | 699 | 361 | 1.692 | +137.16% | 24.15% |
+| H-0160, half-hour spread | 1,228 | 493 | 0.564 | +30.08% | 30.57% |
+| H-0161, half-hour stronger prior trend | 1,076 | 455 | 1.026 | +84.51% | 27.71% |
+| H-0162, half-hour lower absolute threshold | 1,269 | 498 | 0.816 | +45.46% | 32.50% |
+| H-0163, quarter-hour extra diversification | 2,022 | 579 | 0.107 | −0.43% | 31.87% |
+
+H-0161 (job `f1b5e6a5b99141c084ac0faaa45e0035`) had the best Sharpe and ROI among the first candidates with 1,000 completed positions. Its 455 entry days are exactly 2.5 times H-0143's 182. The busiest ten dates contributed 5.58% of its positions versus 11.69% for H-0143. It caps daily submitted entries at six and admits a 1.8% half-hour shock after a 6.5% gain over the prior 24 hours. Its terminal equity was 18,451.42 USDT. The new H-0143 report reproduced its prior lifecycle, return, drawdown, equity and execution metrics exactly after excluding the new entry-day field. Native terminal accounting reconciled across the wave. That mixed-cadence run took 550.42 s for 517,720,813 shared observed bars and sampled approximately 2.14 GiB worker RSS. The higher quarter-hour activity did not translate into net gains. The hourly follow-up tests whether relaxing the relative or absolute shock thresholds modestly can recover the 301-position gap in H-0159 while retaining more of its Sharpe.
+
+The four hourly follow-up screens H-0165 through H-0168 closed 364–414 positions across 141–151 days. Their Sharpe ranged from 2.683 to 3.399. H-0166, H-0165 and H-0168 advanced unchanged as H-0170 through H-0172 under campaign C-a6a1fa6216c00bc7. H-0169 is a nine-day execution diagnostic for H-0161. The follow-up screen and full receipts live under `position-spread-hourly-*`.
+
+| Two-year hourly follow-up | Completed positions | UTC entry days | Net Sharpe | Net ROI | Maximum drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| H-0170, smaller absolute shock | 892 | 408 | 1.383 | +112.50% | 29.72% |
+| H-0171, lower surprise hurdle | 898 | 414 | 1.316 | +102.97% | 32.93% |
+| H-0172, broader eligibility and smaller entries | 1,040 | 452 | 1.116 | +59.25% | 27.68% |
+
+H-0172 (job `82684ec19c634af39dda1e830a93a0d2`) has the highest Sharpe among the candidates meeting 1,000 positions. It requires a 1.9% hourly shock and a 2.5% prior 24-hour gain, uses 7.5% of equity per entry, up to ten open slots, and no more than five submitted entries per day. Its busiest ten days account for 4.81% of entries, and terminal equity was 15,925.33 USDT. H-0161 has the higher net ROI and slight advantages in both count and entry-day coverage. H-0162 offers more activity among profitable variants, with 1,269 positions across 498 days. The hourly follow-up full wave took 283.63 s. Its native terminal accounting reconciled.
+
+H-0161's exact nine-day replay H-0173 reconciled 56 ordinary fills to audited opens, modeled prices and fees. Two exceeded total traded notional for their respective five-second bars, with a maximum of 3.35 times the bar's traded notional. H-0172's exact nine-day replay H-0175 reconciled 50 ordinary fills. Five exceeded the whole bar's traded notional, with a maximum of 46.40 times. These are nine-day diagnostics with fresh wallets. Capacity remains unverified over both full histories. [H-0161 result](http://127.0.0.1:8765/api/hypotheses/H-0161/results) · [H-0172 result](http://127.0.0.1:8765/api/hypotheses/H-0172/results)
