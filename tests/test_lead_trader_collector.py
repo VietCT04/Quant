@@ -131,3 +131,15 @@ def test_public_transport_preserves_headers_and_body_on_http_throttle(monkeypatc
     assert payload["code"] == "90801003" and observed["retry-after"] == "480"
     assert '"portfolio";r=10' in observed["ratelimit"]
     assert "set-cookie" not in observed
+
+
+def test_moving_position_offset_is_reported_as_unverified(tmp_path):
+    position = {"positionId": "10", "index": "4", "updateTime": 1000, "symbol": "BTCUSDT"}
+    with closing(store.connect(tmp_path)) as db:
+        with db:
+            store.task(db, "position", int(NOW), 0, NOW, "sweep")
+        job = store.next_task(db, NOW)
+        collector.execute(db, job, {}, SETTINGS, message([position, position], 3), clock=lambda: NOW)
+        result = collector.status(db)["position_sweep"]
+        assert result["state"] == "unverified"
+        assert result["received"] == 2 and result["distinct_records"] == 1

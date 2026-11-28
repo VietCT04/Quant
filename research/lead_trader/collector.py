@@ -136,6 +136,8 @@ def execute(db, job, limiter, settings, read=public_read, clock=time.time):
             phase = "unverified" if count >= 3 else "pending"
             db.execute("UPDATE tasks SET state=?,unstable=?,due=?,failure=? WHERE id=?",
                        (phase, count, now + 900 * count, f"HTTP {http}: {detail}", job["id"]))
+            if phase == "unverified" and job["kind"] == "position" and job["mode"] == "sweep":
+                store.put(db, "position_sweep_finished", now)
         else:
             db.execute("UPDATE tasks SET failure=? WHERE id=?", (f"{result}: {detail}", job["id"]))
     return result
@@ -215,15 +217,21 @@ def status(db):
               "availability": "expired" if hi <= readable else "partial retention overlap" if lo < readable else "eligible"}
              for lo, hi in missing]
     current = store.next_task(db, now, settings["retention"])
+    sweep = db.execute("""
+        SELECT id,state,page,expected,received,unstable,failure,
+               (SELECT count(*) FROM seen WHERE task=tasks.id) AS distinct_records
+        FROM tasks WHERE kind='position' AND mode='sweep' ORDER BY id DESC LIMIT 1
+    """).fetchone()
+    by_endpoint = {row[0]: row[1] for row in db.execute("SELECT endpoint,count(*) FROM requests GROUP BY endpoint")}
     return {"portfolio_id": PORTFOLIO, "running": running, "worker": heart, "stopping": store.get(db, "stop", False),
             "records": scopes, "tasks": [dict(r) for r in rows], "verified_order_intervals": complete,
             "missing_order_intervals": spans, "order_frontier_utc": iso(frontier, ms=True),
-            "latest_position_sweep": iso(store.get(db, "position_sweep_finished")),
+            "latest_position_sweep": iso(store.get(db, "position_sweep_finished")), "position_sweep": dict(sweep) if sweep else None,
             "next_task": dict(current) if current else None, "next_permitted_request_utc": None if paused else iso(when),
             "pacing_seconds": limiter.get("pace", rate.MIN_PACE), "blockers": blockers,
             "local_windows": local, "reported_limits": remote, "paused": paused,
             "requests_made": db.execute("SELECT count(*) FROM requests").fetchone()[0],
-            "unfinished_requests": unfinished, "latest_response": newest, "errors": errors}
+            "requests_by_endpoint": by_endpoint, "unfinished_requests": unfinished, "latest_response": newest, "errors": errors}
 
 
 def import_captures(db, paths):
@@ -296,8 +304,8 @@ def launch(home, db):
         with db:
             store.put(db, "stop", False)
             store.put(db, "heartbeat", {"phase": "starting", "time": time.time()})
-        with out.open("ab") as stream:
-            child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stream, stderr=stream, cwd=ROOT, **options)
+    with out.open("ab") as stream:
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stream, stderr=stream, cwd=ROOT, **options)
     for _ in range(50):
         info = status(db)
         if info["worker"].get("pid") and info["worker"].get("phase") != "stopped":

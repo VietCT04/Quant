@@ -57,7 +57,8 @@ def get(db, key, default=None):
 
 
 def put(db, key, value):
-    db.execute("INSERT INTO state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body",
+    db.execute("""INSERT INTO state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body
+                  WHERE excluded.body!=state.body""",
                (key, json.dumps(value, separators=(",", ":"))))
 
 
