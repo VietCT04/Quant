@@ -15,7 +15,7 @@ import polars as pl
 from . import data
 from .explorer import TIMEFRAMES, _compact, _extrema, _scan, _symbol
 from .explorer_ledger import execution, reconstruct
-from .public_inventory import Report, reconstruct_public
+from .public_inventory import Report, lifecycle_coverage, reconstruct_public
 from .validation import RESEARCH_START, RESEARCH_END
 
 
@@ -111,7 +111,15 @@ class SymbolTape:
         return tuple(i for i in range(lo, hi) if self.matches(self.rows[i], q))
 
     def matches(self, row, q):
-        position = self.positions.get(row.get("position"), {})
+        links = row.get("positions", ())
+        lifecycle = q.get("lifecycle")
+        if lifecycle and lifecycle not in links:
+            return False
+        candidates = (lifecycle,) if lifecycle else links
+        if q.get("complete") == "1" and not any(
+                self.positions[key].get("completeness") == "complete" for key in candidates):
+            return False
+        position = self.positions.get(lifecycle or row.get("position"), {})
         if q.get("action") and row["type"] != q["action"]:
             return False
         if q.get("direction") and (position.get("side") or row.get("direction")) != q["direction"]:
@@ -130,17 +138,23 @@ class SymbolTape:
 
     def scoped(self, q):
         keys = ("from", "to", "action", "direction", "outcome", "minSize", "maxSize", "minPosition",
-                "minMinutes", "minAdds", "minReduces")
+                "minMinutes", "minAdds", "minReduces", "complete", "lifecycle")
         # Eventual lifecycle outcomes and counts are hidden during causal review.
         future = {"outcome", "minMinutes", "minAdds", "minReduces", "direction"} if "clock" in q else set()
         if future and self.rows and "reported_pnl" in self.rows[0]:
-            future.update(("action", "minPosition"))
+            future.update(("action", "minPosition", "complete", "lifecycle"))
         return self.filtered(tuple((k, q[k]) for k in keys if q.get(k) and k not in future))
 
-    def describe(self, index, scope, clock=None):
+    def describe(self, index, scope, clock=None, lifecycle=None, complete=False):
         row = self.rows[index]
         rank = bisect_left(scope, index)
-        life = self.positions.get(row.get("position"))
+        active = row.get("position")
+        memberships = row.get("positions", ())
+        if lifecycle in memberships:
+            active = lifecycle
+        elif complete and self.positions.get(active, {}).get("completeness") != "complete":
+            active = next((key for key in memberships if self.positions[key].get("completeness") == "complete"), active)
+        life = self.positions.get(active)
         if life and clock is not None:
             life = {k: life[k] for k in ("id", "symbol", "side", "entry_ms") if k in life}
         previous = self.rows[index - 1] if index else None
@@ -152,19 +166,30 @@ class SymbolTape:
         else:
             percent = None
         if clock is not None and "reported_pnl" in row:
-            row, life, percent = as_reported(row), None, None
-        return {**row, "ordinal": index, "rank": rank if rank < len(scope) and scope[rank] == index else None,
+            row, life, percent, active = as_reported(row), None, None, None
+        return {**row, "position": active, "ordinal": index, "rank": rank if rank < len(scope) and scope[rank] == index else None,
                 "previous_ms": previous["ms"] if previous else None, "position_info": life,
                 "adjustment_pct": percent}
 
     def navigate(self, q):
+        direction = q.get("directionStep", "select")
+        if direction == "opening":
+            q = {k: q[k] for k in ("id", "position", "lifecycle", "complete", "clock") if k in q}
         scope = self.scoped(q)
         if not scope:
             return {"row": None, "total": 0}
+        lifecycle = q.get("lifecycle") if "clock" not in q else None
+        complete = q.get("complete") == "1" and "clock" not in q
         current = self.indices.get(q.get("id"))
-        direction = q.get("directionStep", "select")
         index = current
-        if direction in {"first", "last", "rank"}:
+        if direction == "opening":
+            key = q.get("position") or lifecycle or (self.rows[current].get("position") if current is not None else None)
+            life = self.positions.get(key, {})
+            if "clock" in q or not life.get("opening_execution_id"):
+                return {"row": None, "total": len(scope), "notice": "Opening execution unavailable in this replay."}
+            index = self.indices[life["opening_execution_id"]]
+            lifecycle = key
+        elif direction in {"first", "last", "rank"}:
             i = 0 if direction == "first" else len(scope) - 1 if direction == "last" else int(q["rank"])
             index = scope[min(max(0, i), len(scope) - 1)]
         elif direction in {"previous", "next"}:
@@ -172,7 +197,19 @@ class SymbolTape:
                 len(scope) - 1 if direction == "previous" else 0)
             index = scope[i] if 0 <= i < len(scope) else current
         elif direction in {"previousPosition", "nextPosition"}:
-            if current is None:
+            if lifecycle:
+                index = current if current in scope else scope[0]
+            elif complete:
+                openings = sorted(self.indices[p["opening_execution_id"]] for p in self.lives
+                                  if p.get("completeness") == "complete" and self.indices[p["opening_execution_id"]] in scope)
+                if current is None:
+                    index = openings[0] if openings else scope[0]
+                else:
+                    active = self.describe(current, scope, complete=True).get("position_info") or {}
+                    base = self.indices.get(active.get("opening_execution_id"), current)
+                    i = bisect_left(openings, base) - 1 if direction == "previousPosition" else bisect_right(openings, base)
+                    index = openings[i] if 0 <= i < len(openings) else current
+            elif current is None:
                 index = self.lifecycle_starts[0] if self.lifecycle_starts else scope[0]
             else:
                 active = self.first.get(self.rows[current].get("position"), current)
@@ -185,10 +222,12 @@ class SymbolTape:
             index = scope[min(seek, len(scope) - 1)]
         elif not q.get("id"):
             index = scope[0]
+        if (lifecycle or complete) and direction != "opening" and index not in scope:
+            index = scope[0] if q.get("id") and not q.get("position") else None
         if index is None:
             return {"row": None, "total": len(scope)}
         clock = self.rows[index]["ms"] if "clock" in q else None
-        return {"row": self.describe(index, scope, clock), "total": (bisect_right(scope, index) if clock is not None else len(scope))}
+        return {"row": self.describe(index, scope, clock, lifecycle, complete), "total": (bisect_right(scope, index) if clock is not None else len(scope))}
 
     def page(self, q):
         scope = self.scoped(q)
@@ -199,7 +238,7 @@ class SymbolTape:
         n = bisect_left(scope, ceiling)
         offset = max(0, int(q.get("offset", 0)))
         limit = min(200, max(1, int(q.get("limit", 120))))
-        return {"rows": [self.describe(i, scope, through) for i in scope[offset:min(n, offset + limit)]], "total": n}
+        return {"rows": [self.describe(i, scope, through, q.get("lifecycle"), q.get("complete") == "1") for i in scope[offset:min(n, offset + limit)]], "total": n}
 
 
 class ReplayWorkspace:
@@ -262,6 +301,10 @@ class ReplayWorkspace:
             raw = db.execute("SELECT id,body FROM orders WHERE symbol=? ORDER BY ms,id", (symbol,)).fetchall()
             reports = [json.loads(r[0]) for r in db.execute("SELECT body FROM positions WHERE symbol=?", (symbol,))]
             windows = db.execute("SELECT lo,hi FROM tasks WHERE kind='order' AND state='complete' ORDER BY lo").fetchall()
+            retention, observed = db.execute("""SELECT
+                (SELECT json_extract(body, '$.retention') FROM state WHERE key='settings'),
+                (SELECT max(captured) FROM pages WHERE kind='order')""").fetchone()
+        retention_start = int((observed - retention) * 1000) if observed is not None and retention else None
         coverage = []
         for lo, hi in windows:
             if coverage and lo <= coverage[-1][1]:
@@ -316,7 +359,11 @@ class ReplayWorkspace:
                           "exit_ms": closed, "state": "reported only", "duration_ms": closed - opened if closed else None,
                           "reported_pnl": report.get("closingPnl"),
                           "provenance": "Published position summary; execution path unavailable"})
+        lifecycle_coverage(rows, lives, lookup, coverage, retention_start)
         reconstruction = {
+            "lifecycles": dict(Counter(life["completeness"] for life in lives)),
+            "opening_status": dict(Counter(life["opening_status"] for life in lives)),
+            "order_retention_start_ms": retention_start,
             "orders": len(rows), "actions": dict(Counter(row["action_certainty"] for row in rows)),
             "action_types": dict(Counter(row["type"] for row in rows)),
             "quantity": dict(Counter(row["quantity_certainty"] for row in rows)),
@@ -462,9 +509,13 @@ class ReplayWorkspace:
             right = min(right, selected + 1 if selected is not None and tape.times[selected] == through
                         else bisect_right(tape.times, through))
         limit = 30_000
-        marker_rows = tape.rows[left:min(right, left + limit)]
-        if selected is not None and left + limit <= selected < right:
-            marker_rows = [*marker_rows, tape.rows[selected]]
+        indices = range(left, right)
+        if job == "binance" and through is None and (q.get("complete") == "1" or q.get("lifecycle")):
+            scope = tape.scoped({k: q[k] for k in ("complete", "lifecycle") if k in q})
+            indices = scope[bisect_left(scope, left):bisect_left(scope, right)]
+        marker_rows = [tape.rows[i] for i in indices[:limit]]
+        if selected is not None and selected in indices and selected not in indices[:limit]:
+            marker_rows.append(tape.rows[selected])
         if job == "binance" and through is not None:
             marker_rows = [as_reported(row) for row in marker_rows]
         markers = [{k: row[k] for k in MARKER_FIELDS if k in row} for row in marker_rows]
@@ -482,13 +533,16 @@ class ReplayWorkspace:
                 if through is not None:
                     features = features | {"series": {k: [p for p in values if len(p) > 3 and p[3] is not None and p[3] <= through]
                                                         for k, values in features["series"].items()}}
-        return {"candles": candles, "markers": markers, "marker_total": max(0, right - left), "series": series,
+        return {"candles": candles, "markers": markers, "marker_total": len(indices), "series": series,
                 "features": features, "reconstruction": tape.reconstruction if through is None else {}}
 
     def symbol_series(self, job, original, detail, tape, symbol, candles, through, selected, q):
         points = {k: [] for k in ("qty", "notional", "entry", "initial", "breakeven", "unrealized", "realized", "net", "funding")}
         native = job != "binance"
         step = candles["step"]
+        scope = tape.positions.get(q.get("lifecycle"), {}) if not native and through is None else {}
+        holding = ((scope["opening_execution_ms"] or scope["first_execution_ms"] or scope["entry_ms"]),
+                   (scope["exit_ms"] or scope["report_through_ms"] + 1)) if scope else None
         tape_times = tape.times
         position = self.explorer._paths(detail) if detail else {}
         native_marks = {}
@@ -511,7 +565,8 @@ class ReplayWorkspace:
             event = tape.rows[i] if i >= 0 else {}
             life = tape.positions.get(event.get("position"), {})
             qty = event.get("after", 0. if native and detail and not event else None)
-            if not native and (through is not None or clock >= event.get("inventory_until", -1)):
+            if not native and (through is not None or clock >= event.get("inventory_until", -1) or
+                               holding and not holding[0] <= clock < holding[1]):
                 qty = None
             entry = event.get("entry_after") if qty else None
             mark = native_marks.get(stamp) if native else candle.get("close")
@@ -538,11 +593,11 @@ class ReplayWorkspace:
             if selected is not None and through is not None and tape.times[selected] == through:
                 right = min(right, selected + 1)
             if right - left <= 30_000 and (not native or detail):
-                self.transitions(points, tape, lo, hi, left, right, native, through, q, step)
+                self.transitions(points, tape, lo, hi, left, right, native, through, q, step, holding)
         return points
 
     @staticmethod
-    def transitions(points, tape, lo, hi, left, right, native, through, q, step):
+    def transitions(points, tape, lo, hi, left, right, native, through, q, step, holding=None):
         raw = tape.rows[left:right]
         prior = tape.rows[left - 1] if left else {}
         mapping = (("qty", "after"), ("entry", "entry_after"), ("breakeven", "breakeven"),
@@ -558,14 +613,19 @@ class ReplayWorkspace:
             for field, value in (("qty", "after"), ("entry", "entry_after")):
                 known = {}
                 for row in ([prior] if prior else []) + raw:
+                    start = max(lo, row["ms"])
                     until = row.get("inventory_until", -1)
-                    if until <= lo or row.get(value) is None:
+                    if holding:
+                        start = max(start, holding[0])
+                        until = min(until, holding[1])
+                    if until <= start or row.get(value) is None:
                         continue
-                    known[max(lo, row["ms"])] = row[value]
+                    known[start] = row[value]
                     if until <= hi:
                         known[until] = None
                 points[field + "_events"] = sorted([t, v] for t, v in known.items())
-            marks = {row["ms"] // step * step: row["unrealized"] for row in raw if row.get("entry_after") is not None}
+            marks = {row["ms"] // step * step: row["unrealized"] for row in raw if row.get("entry_after") is not None and
+                     (holding is None or holding[0] <= row["ms"] < holding[1])}
             points["unrealized_at_fill"] = [[t, value] for t, value in marks.items()]
         if q.get("connections") == "1":
             connected = defaultdict(dict)
@@ -666,6 +726,8 @@ class ReplayWorkspace:
             if detailed and through is None and q.get("excursions") == "1":
                 exact, *_ = self.explorer._exact_ledger(original, detailed, symbol)
                 rows = [position_fields(p) for p in exact]
+            if job == "binance" and q.get("complete") == "1":
+                rows = [p for p in rows if p["completeness"] == "complete"]
             offset = max(0, int(q.get("offset", 0)))
             rank = next((i for i, row in enumerate(rows) if row["id"] == q.get("anchor")), None)
             return {"rows": rows[offset:offset + 150], "total": len(rows), "rank": rank}

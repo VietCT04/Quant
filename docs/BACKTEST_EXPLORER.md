@@ -32,6 +32,34 @@ Unrealized P&L uses audited candle closes where available. Dots indicate the lat
 
 Click the coverage count beneath the chart for a symbol's confidence levels and failure reasons. Refresh reads the latest collector revision and keeps the active symbol and selected execution. The same counts are available at `GET /api/replay/binance/reconstruction?symbol=BTWUSDT`.
 
+### Replay a complete Binance lifecycle
+
+Use **Positions** and **Complete lifecycles only** to keep closed positions with matched opening and closing orders, complete verified order coverage, and reconciled quantities. **Jump to position opening** selects the original opening order and scopes execution navigation and markers to that lifecycle. A reversal can open one lifecycle and close another with a single order ID. The replay retains the selected lifecycle at that shared boundary. **Clear position replay** returns to the symbol scope.
+
+A row can display **Opening missing**, **Order history gaps**, **Open through report**, or **Unreconciled**. The inspector gives the opening evidence, the first captured fill, and the inventory known at that boundary. When an incomplete position has a known opening, the jump action still works. A pre-existing position with no opening fill begins at its first captured execution and has no opening marker. Lifecycle summaries and completeness filters are available in Analysis mode.
+
+#### BTWUSDT opening-history audit
+
+The frozen archive contained 179 BTWUSDT lifecycle summaries and 805 unique orders. Of the 179, 175 ended before the first captured BTWUSDT order. The four lifecycles with linked fills are below.
+
+| Lifecycle suffix | Side | Reported opening (UTC) | Reported close (UTC) | Earliest captured fill (UTC) | Verified order coverage of report | Starting inventory |
+| --- | --- | --- | --- | --- | ---: | --- |
+| :53 | Long | Nov 16 07:17:03.996 | Nov 22 21:55:12.896 | Nov 20 21:47:28.691 | 27.3% | Opening unavailable. Quantity before first sale unknown. |
+| :54 | Short | Nov 22 21:55:12.896 | Nov 23 07:53:45.396 | Nov 22 21:55:12.896 | 100% | -289 BTW after opening reversal. |
+| :55 | Long | Nov 23 07:53:45.396 | Nov 28 10:20:05.547 | Nov 23 07:53:45.396 | 80.2% | +55 BTW after opening reversal. |
+| :56 | Short | Nov 28 10:20:05.547 | Open at Nov 28 10:33:22.436 report | Nov 28 10:20:05.546 | 100% through report | Opening reversal matched within one millisecond. Quantity split unknown. |
+
+The first captured :53 fill sold 27 BTW from an existing long. Its reported opening predates the oldest saved order capture and was outside the collector's seven-day public order retention window even at the first archived request. The November 21 order gap falls after that opening. All 176 unmatched openings predate the retention cutoff recorded for the frozen audit. None had an opening that was still within a pending backfill range, missing inside a verified pagination window, or matched to a raw order that the Explorer dropped.
+
+The initial archive check compared 1,255 BTWUSDT records in retained raw order pages with the normalized archive and checked 11 historical exports plus the initial portfolio export. All 771 unique raw page orders and all 535 unique export orders were already in the archive. There were no additional opening orders to import. The six-fill :54 short reconciles as the opening reversal, four reductions, and the closing reversal. The :55 opening is available, and its later order history has gaps. The :56 opening is also available. Its position report was picked up while the collector continued to run.
+
+Generate a CSV containing every reported lifecycle, its timestamps, linked execution counts, starting quantity evidence, and verified intervals:
+
+```powershell
+.venv/Scripts/python.exe -m research.lead_trader.reconstruction_audit --lifecycles BTWUSDT --out data/research/lead-trader/btw-lifecycles.csv
+node control-ui/tests/public-lifecycles.mjs
+```
+
 ### Reconstruction audit
 
 A frozen archive snapshot contained 21,791 orders across 246 symbols and 9,993 position summaries. The orders span November 20 through November 28, 2026 UTC. The prior implementation at `c57dbab` required a fully closed lifecycle, unique boundary fills, verified coverage for the entire path, and exact reconciliation to peak and closed volume. This left 18,282 orders without a position action. It also discarded a reversal when the quantity of only one leg was independently available.

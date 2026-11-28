@@ -1,6 +1,6 @@
-﻿import pytest
+import pytest
 
-from quant.public_inventory import Report, reconstruct_public
+from quant.public_inventory import Report, lifecycle_coverage, reconstruct_public
 
 
 def fill(ms, qty, price, pnl=0):
@@ -82,3 +82,22 @@ def test_report_conflicts_and_ambiguous_boundary_fills_stay_unclassified():
     reconstruct_public(rows, {"p": summary(10, 35, peak=5, turnover=1)}, [(5, 40)], {})
     assert [r["action_certainty"] for r in rows] == ["unknown", "unknown", "unknown", "inferred"]
     assert all("after" not in r for r in rows)
+
+
+def test_lifecycle_coverage_never_treats_first_trim_as_opening():
+    report = {
+        "expired": summary(100, 200, peak=20, turnover=5, closed=True),
+        "pending": summary(220, 230, peak=9, turnover=0),
+        "verified": summary(250, 270, peak=10, turnover=5, closed=True),
+    }
+    rows = [fill(190, -5, 3)]
+    rows[0].update(id="first", positions=["expired"], type="scale_out")
+    lives = [{"id": k, "state": "reported only"} for k in report]
+    lifecycle_coverage(rows, lives, report, [(180, 210), (245, 280)], 150)
+    assert [life["opening_status"] for life in lives] == [
+        "outside_public_retention", "order_window_unverified", "missing_inside_verified_window"]
+    assert all(life["completeness"] == "opening_missing" for life in lives)
+    assert lives[0]["first_execution_id"] == "first"
+    assert lives[0]["first_inventory_before"] is None
+    assert lives[0]["opening_execution_id"] is None
+    assert lives[0]["covered_order_ms"] == 21

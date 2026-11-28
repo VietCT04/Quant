@@ -78,7 +78,7 @@ def test_external_archive_retains_individual_fills_and_hides_unknown_inventory(t
     with closing(sqlite3.connect(archive)) as db:
         db.executescript("""CREATE TABLE orders(id TEXT, ms INT, symbol TEXT, body TEXT);
             CREATE TABLE positions(symbol TEXT,body TEXT); CREATE TABLE tasks(kind TEXT, state TEXT,lo INT,hi INT);
-            CREATE TABLE pages(id INT,kind TEXT,body TEXT);""")
+            CREATE TABLE pages(id INT,kind TEXT,body TEXT,captured REAL); CREATE TABLE state(key TEXT,body TEXT);""")
         for key, pnl in (("a", 0), ("b", 5)):
             body = dict(symbol="AUSDT", orderUpdateTime=100, orderTime=99, avgPrice=2.,
                         executedQty=3., side="SELL", totalPnl=pnl)
@@ -101,7 +101,7 @@ def test_external_archive_retains_individual_fills_and_hides_unknown_inventory(t
                       updateTime=105, maxOpenInterest=10., closedVolume=6., avgCost=1.5,
                       status="Partially Closed")
         db.execute("INSERT INTO positions VALUES (?,?)", (symbol, json.dumps(report)))
-        db.execute("INSERT INTO pages VALUES (1,'position',?)", (json.dumps({"data": {"list": [report]}}),))
+        db.execute("INSERT INTO pages VALUES (1,'position',?,0)", (json.dumps({"data": {"list": [report]}}),))
         db.commit()
     refreshed = reader.external_tape(symbol, reader.archive_version())
     assert refreshed.reconstruction["actions"] == {"inferred": 2}
@@ -109,3 +109,27 @@ def test_external_archive_retains_individual_fills_and_hides_unknown_inventory(t
     assert refreshed.rows[-1]["reported_pnl"] == 5
     assert refreshed.page({"clock": 100, "selected": "b"})["rows"][-1]["type"] == "realized"
     assert tape.page({"clock": 100, "selected": "a"})["total"] == 1
+
+
+def test_complete_lifecycle_filter_and_position_scoped_reversal():
+    rows = [
+        event("reduce", 100, 3, 2, "older", "scale_out"),
+        event("head", 110, 2, -3, "complete", "reversal", reported_pnl=1),
+        event("trim", 120, -3, -1, "complete", "scale_out", reported_pnl=2),
+        event("tail", 130, -1, 2, "new", "reversal", reported_pnl=3),
+        event("add", 140, 2, 3, "new", "scale_in", reported_pnl=0),
+    ]
+    rows[1]["positions"] = ["older", "complete"]
+    rows[3]["positions"] = ["complete", "new"]
+    tape = SymbolTape(rows, [
+        {"id": "older", "completeness": "opening_missing"},
+        {"id": "complete", "completeness": "complete", "opening_execution_id": "head"},
+        {"id": "new", "completeness": "order_gaps", "opening_execution_id": "tail"},
+    ])
+    assert [r["id"] for r in tape.page({"complete": "1"})["rows"]] == ["head", "trim", "tail"]
+    assert tape.navigate({"directionStep": "opening", "position": "older"})["row"] is None
+    assert tape.navigate({"directionStep": "opening", "position": "complete", "lifecycle": "complete",
+                          "action": "scale_out"})["row"]["id"] == "head"
+    result = tape.navigate({"directionStep": "next", "id": "trim", "lifecycle": "complete"})
+    assert result["row"]["id"] == "tail" and result["row"]["position"] == "complete"
+    assert tape.navigate({"directionStep": "next", "id": "tail", "lifecycle": "complete"})["row"]["id"] == "tail"

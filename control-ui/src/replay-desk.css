@@ -177,3 +177,11 @@
   padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
   line-height: 1.55; white-space: normal;
 }
+
+.replay-life-evidence { display: grid; gap: 4px; padding: 7px 9px; border-bottom: 1px solid var(--border); }
+.replay-life-evidence small { color: var(--muted); }
+.replay-life-evidence button { justify-self: start; padding: 2px 5px; }
+.replay-life-scope { display: flex; align-items: center; gap: 8px; padding: 3px 8px; color: var(--muted); }
+.replay-life-scope button { padding: 1px 5px; }
+.replay-complete-filter { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; margin-left: auto; }
+.replay-opening-button { display: inline-flex; vertical-align: middle; margin-left: 6px; }

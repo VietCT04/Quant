@@ -451,3 +451,59 @@ def reconstruct_public(rows, lookup, coverage, allocations, snapshots=None):
         elif row["after"] == 0:
             row["unrealized"] = 0.
     return links[-1]
+
+
+def lifecycle_coverage(rows, lives, lookup, coverage, retention_start):
+    """Describe public replay boundaries independently of whether a whole path reconciled."""
+    linked = defaultdict(list)
+    times = [r["ms"] for r in rows]
+    for row in rows:
+        for key in row["positions"]:
+            linked[key].append(row)
+    for life in lives:
+        raw = lookup[life["id"]]
+        report = Report.read(life["id"], raw)
+        fills = linked[report.key]
+        first = fills[0] if fills else {}
+        opening = next((r for r in fills if abs(r["ms"] - report.start) <= 1 and (
+            r["type"] in {"long_entry", "short_entry"} or
+            r["type"] == "reversal" and r["positions"][-1] == report.key)), None)
+        closing = next((r for r in reversed(fills) if report.closed and abs(r["ms"] - report.end) <= 1 and (
+            r["type"] in {"long_exit", "short_exit"} or
+            r["type"] == "reversal" and r["positions"][0] == report.key)), None)
+        start = min(report.start, opening["ms"]) if opening else report.start
+        end = max(report.end, closing["ms"]) if closing else report.end
+        covered = [[max(start, lo), min(end + 1, hi)] for lo, hi in coverage if lo <= end and hi > start]
+        available = sum(hi - lo for lo, hi in covered)
+        span = end - start + 1
+        near_open = rows[bisect_left(times, report.start - 1):bisect_right(times, report.start + 1)]
+        if opening:
+            reason = "captured"
+        elif near_open:
+            reason = "ambiguous_match"
+        elif any(lo <= report.start < hi for lo, hi in coverage):
+            reason = "missing_inside_verified_window"
+        elif retention_start is not None and report.start < retention_start:
+            reason = "outside_public_retention"
+        else:
+            reason = "order_window_unverified"
+        if not opening:
+            completeness = "opening_missing"
+        elif available != span:
+            completeness = "order_gaps"
+        elif not report.closed:
+            completeness = "open"
+        elif (closing and life["state"] == "closed" and len(fills) == life["executions"]
+              and all(r["action_certainty"] == "confirmed" for r in fills)):
+            completeness = "complete"
+        else:
+            completeness = "unreconciled"
+        limit = None if not opening or opening.get("after") is None else opening["after"]
+        life.update(completeness=completeness, opening_status=reason, opening_execution_id=opening and opening["id"],
+                    opening_execution_ms=opening and opening["ms"], closing_execution_id=closing and closing["id"],
+                    opening_quantity=limit, opening_quantity_certainty=opening and opening["quantity_certainty"],
+                    first_execution_id=first.get("id"), first_execution_ms=first.get("ms"), captured_executions=len(fills),
+                    first_inventory_before=first.get("before"),
+                    first_inventory_certainty=first.get("quantity_certainty", "unknown"),
+                    report_through_ms=report.end, covered_order_ms=available, report_span_ms=span,
+                    covered_order_intervals=covered)

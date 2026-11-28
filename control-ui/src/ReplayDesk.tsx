@@ -10,16 +10,19 @@ import './replay-desk.css'
 
 export type ReplayMeta = Meta & { source?: 'native' | 'external'; revision?: string; order_coverage?: [number, number][] }
 type Life = { id: string; symbol: string; side: string; state: string; entry_ms: number; exit_ms?: number; provenance?: string;
+  completeness?: string; opening_status?: string; opening_execution_id?: string; first_execution_id?: string;
+  first_execution_ms?: number; captured_executions?: number; first_inventory_before?: number; first_inventory_certainty?: string;
+  opening_quantity?: number; covered_order_ms?: number; report_span_ms?: number;
   duration_ms?: number; net_pnl?: number; reported_pnl?: number; max_notional?: number; mae?: number; mfe?: number; executions?: number }
 type ReplayRow = Execution & { id: string; rank: number | null; ordinal: number; position_info?: Life; previous_ms?: number }
-type Browse = { row: ReplayRow | null; total: number }
+type Browse = { row: ReplayRow | null; total: number; notice?: string }
 type Page<T> = { rows: T[]; total: number; rank?: number }
 type WatchRow = { symbol: string; market: number | null; executed: number; coverage: number; pnl: number | null; positions: number; count: number }
 type Watch = Window & { rows: WatchRow[] }
 type Prefs = ChartPrefs & { tf: Timeframe; mode: 'analysis' | 'true'; watch: boolean; ledger: boolean; inspector: boolean;
   speed: number; period: string; sort: keyof WatchRow; descending: boolean; ledgerHeight: number }
 type Filters = Record<string, string>
-type Action = 'previous' | 'next' | 'first' | 'last' | 'previousPosition' | 'nextPosition' | 'rank' | 'select'
+type Action = 'previous' | 'next' | 'first' | 'last' | 'previousPosition' | 'nextPosition' | 'rank' | 'select' | 'opening'
 
 const defaults: Prefs = {
   tf: '1m', mode: 'analysis', light: false, log: false, labels: true, volume: true, marked: false, net: false,
@@ -29,6 +32,16 @@ const defaults: Prefs = {
 }
 const optionNames: Record<PanelId, string> = { inventory: 'Signed inventory', unrealized: 'Unrealized P&L',
   realized: 'Cumulative realized', equity: 'Account equity', signals: 'Strategy signals', funding: 'Funding' }
+const lifeLabels: Record<string, string> = {
+  complete: 'Complete', opening_missing: 'Opening missing', order_gaps: 'Order history gaps',
+  open: 'Open through report', unreconciled: 'Unreconciled',
+}
+const openingLabels: Record<string, string> = {
+  outside_public_retention: 'Outside public order retention',
+  order_window_unverified: 'Opening window pending or unverified',
+  missing_inside_verified_window: 'No opening in verified order window',
+  ambiguous_match: 'Opening fill match ambiguous',
+}
 const ROW = 26
 const PAGE = 100
 const same = (a: Window, b: Window) => a.start === b.start && a.end === b.end
@@ -67,6 +80,7 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
   const [selected, setSelected] = useState<ReplayRow>()
   const [total, setTotal] = useState(0)
   const [notice, setNotice] = useState('')
+  const [lifecycle, setLifecycle] = useState<string | undefined>(() => initial.get('lifecycle') ?? undefined)
   const [filters, setFilters] = useState<Filters>(() => read('quant.replay.filters', {}))
   const [settings, setSettings] = useState(false)
   const [search, setSearch] = useState('')
@@ -83,10 +97,12 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
   latest.current = { symbol, view, selected, filters, meta, step, prefs }
   const trueMode = prefs.mode === 'true'
   const clock = trueMode ? cursor ?? selected?.ms ?? view.start : undefined
-  const filterScope = useMemo(() => ({ ...filters,
+  const complete = isExternal && !trueMode && filters.complete === '1'
+  const replayLife = isExternal && !trueMode ? lifecycle : undefined
+  const filterScope = useMemo(() => ({ ...filters, lifecycle: replayLife ?? null, complete: complete ? 1 : null,
     from: filters.from && Number.isFinite(epoch(filters.from)) ? epoch(filters.from) : null,
     to: filters.to && Number.isFinite(epoch(filters.to)) ? epoch(filters.to) : null,
-  }), [filters])
+  }), [filters, replayLife, complete])
   const filterRef = useRef(filterScope)
   filterRef.current = filterScope
 
@@ -138,10 +154,16 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
         if (fields.id && target) {
           abort.current = null
           void move('first', {}, target)
-        } else setNotice('No execution matches this selection.')
+        } else setNotice(result.notice || 'No execution matches this selection.')
         return
       }
       const row = result.row
+      if (action === 'opening' && row.position_info) {
+        setLifecycle(row.position_info.id)
+        setFilters(old => ({ complete: old.complete || '' }))
+        setActualTab('executions')
+        route({ lifecycle: row.position_info.id })
+      }
       if (row.id === latest.current.selected?.id && (action === 'next' || action === 'previous')) setPlaying(false)
       setSelected(row)
       setCursor(undefined)
@@ -185,7 +207,28 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
     abort.current?.abort()
     setSelected(undefined)
     setTotal(0)
+    setLifecycle(undefined)
+    route({ lifecycle: null })
     setSymbol(next)
+  }
+
+  function clearLife() {
+    setLifecycle(undefined)
+    route({ lifecycle: null })
+  }
+
+  const previousScope = useRef({ complete, replayLife, revision: meta.revision })
+  useEffect(() => {
+    const old = previousScope.current
+    previousScope.current = { complete, replayLife, revision: meta.revision }
+    if (!isExternal || !ready || (old.complete === complete && old.replayLife === replayLife && old.revision === meta.revision)) return
+    const row = latest.current.selected
+    if (row) void move('select', { id: row.id })
+    else void move('first')
+  }, [complete, replayLife, meta.revision, isExternal, ready, move])
+
+  function jumpOpening(id: string) {
+    void move('opening', { position: id, lifecycle: id })
   }
 
   const watchAnchor = clock == null ? undefined : Math.floor(clock / 60_000) * 60_000
@@ -198,6 +241,7 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
     }), [watchResult?.value, prefs.sort, prefs.descending, search])
   const windowPath = `${base}/window?${params({
     symbol, tf: prefs.tf, start: loaded.start, end: loaded.end, clock, selected: trueMode ? selected?.id : null,
+    complete: complete ? 1 : null, lifecycle: replayLife,
     features: prefs.features || prefs.panels.signals ? 1 : null, equity: prefs.panels.equity ? 1 : null,
     connections: prefs.connections ? 1 : null,
   })}`
@@ -387,7 +431,9 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
           {candleWarnings > 0 && <span className="replay-warning">{candleWarnings} unavailable buckets</span>}
           {!!chartData && chartData.marker_total > chartData.markers.length && <span className="replay-warning">Dense window · zoom for remaining fills</span>}
           {!isExternal && <span>Audited five-second market data</span>}
-          {isExternal && <span className={coveredWindow ? '' : 'replay-warning'}>{coveredWindow ? 'Order window verified' : 'Public order gaps possible'}</span>}
+          {isExternal && (replayLife && visibleSelection?.position_info?.completeness === 'complete'
+            ? <span>Position order history verified</span>
+            : <span className={coveredWindow ? '' : 'replay-warning'}>{coveredWindow ? 'Order window verified' : 'Public order gaps possible'}</span>)}
           {isExternal && !!chartData?.reconstruction?.orders && (() => {
             const info = chartData.reconstruction
             const unknown = (counts: Record<string, number>) => counts.unknown || 0
@@ -404,6 +450,8 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
           })()}
           {chartData?.features.error && <span className="replay-warning" title={chartData.features.error}>Features unavailable</span>}
         </div>
+        {replayLife && <div className="replay-life-scope"><span>Replaying position {replayLife}</span>
+          <button onClick={clearLife}>Clear position replay</button></div>}
         <div className="replay-transport" aria-label="Replay navigation">
           <div className="replay-transport-buttons">
             {navButton('First execution', <ChevronsLeft size={15}/>, () => void move('first'))}
@@ -431,12 +479,16 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
             void move('rank', { rank: value - 1 })
           }} onKeyUp={e => { if (e.key.startsWith('Arrow')) { void move('rank', { rank: Number(e.currentTarget.value) - 1 }); setSeek(undefined) } }} />
       </div>
-      {prefs.inspector && <Inspector selected={visibleSelection} symbol={symbol} isExternal={isExternal} />}
+      {prefs.inspector && <Inspector selected={visibleSelection} symbol={symbol} isExternal={isExternal} jumpOpening={jumpOpening} />}
     </div>
     {prefs.ledger && ready && <TapeLedger base={base} symbol={symbol} selected={visibleSelection} clock={clock} filterScope={filterScope}
       filters={filters} setFilters={setFilters} revision={meta.revision} tab={actualTab} setTab={setActualTab} height={prefs.ledgerHeight}
       onHeight={ledgerHeight => replace({ ledgerHeight })} pick={id => void move('select', { id })}
-      pickLife={id => void move('select', { position: id })} />}
+      complete={complete} toggleComplete={() => { clearLife(); setFilters(old => ({ ...old, complete: complete ? '' : '1' })) }}
+      jumpOpening={jumpOpening} pickLife={(id, fill) => {
+        clearLife()
+        void move('select', fill ? { id: fill, lifecycle: null } : { position: id })
+      }} />}
     {!!chartData?.features.features.length && <details className="replay-provenance">
       <summary>Feature definitions and provenance</summary>
       <pre>{JSON.stringify(chartData.features.features, null, 2)}</pre>
@@ -460,7 +512,9 @@ function buffered(view: Window, meta: Window, step: number): Window {
   return { start: Math.max(meta.start - step, view.start - extra), end: Math.min(meta.end + step, view.end + extra) }
 }
 
-function Inspector({ selected: row, symbol, isExternal }: { selected?: ReplayRow; symbol: string; isExternal: boolean }) {
+function Inspector({ selected: row, symbol, isExternal, jumpOpening }: {
+  selected?: ReplayRow; symbol: string; isExternal: boolean; jumpOpening: (id: string) => void;
+}) {
   const numeric = (k: string) => typeof row?.[k] === 'number' ? Number(row[k]) : undefined
   const info = row?.position_info
   const certainty = (k: string) => { const value = String(row?.[k] || 'unknown'); return value[0].toUpperCase() + value.slice(1) }
@@ -492,6 +546,18 @@ function Inspector({ selected: row, symbol, isExternal }: { selected?: ReplayRow
     {row ? <>
       <div className="replay-inspector-action"><span className={row.side === 'buy' ? 'gain' : 'loss'}>{row.side?.toUpperCase()}</span>
         <strong>{actionName(row)}</strong><b>${usd(row.filled_notional)}</b></div>
+      {info?.completeness && <section className="replay-life-evidence" aria-label="Lifecycle completeness">
+        <strong className={info.completeness === 'complete' ? 'gain' : 'replay-warning'}>{lifeLabels[info.completeness]}</strong>
+        {info.opening_status && info.opening_status !== 'captured' && <small>{openingLabels[info.opening_status]}</small>}
+        {info.completeness === 'opening_missing' && info.first_execution_id && <small>
+          Pre-existing {info.side} inventory. {info.first_inventory_before == null
+            ? 'Starting quantity unknown.' : `Before first captured fill: ${precise(info.first_inventory_before)} (${info.first_inventory_certainty}).`}
+        </small>}
+        <small>Reported opening {utc(info.entry_ms)}</small>
+        {info.first_execution_ms != null && <small>First captured fill {utc(info.first_execution_ms)}</small>}
+        {info.opening_quantity != null && <small>Booked inventory after opening {precise(info.opening_quantity)}</small>}
+        {info.opening_execution_id && <button onClick={() => jumpOpening(info.id)}>Jump to position opening</button>}
+      </section>}
       <dl>{fields.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl>
       <div className="replay-rationale"><strong>Decision reason</strong>
         <p>{row.decision_rationale as string || (row.virtual ? 'End-of-backtest valuation' : 'Unavailable')}</p>
@@ -507,11 +573,12 @@ function Inspector({ selected: row, symbol, isExternal }: { selected?: ReplayRow
 }
 
 function TapeLedger({ base, symbol, selected, clock, revision, filterScope, filters, setFilters, tab, setTab,
-  height, onHeight, pick, pickLife }: {
+  height, onHeight, pick, pickLife, complete, toggleComplete, jumpOpening }: {
   base: string; symbol: string; selected?: ReplayRow; clock?: number; revision?: string;
   filterScope: Record<string, string | number | null>; filters: Filters; setFilters: (f: Filters) => void;
   tab: 'executions' | 'lifecycles'; setTab: (v: 'executions' | 'lifecycles') => void; height: number;
-  onHeight: (h: number) => void; pick: (id: string) => void; pickLife: (id: string) => void;
+  onHeight: (h: number) => void; pick: (id: string) => void; pickLife: (id: string, fill?: string) => void;
+  complete: boolean; toggleComplete: () => void; jumpOpening: (id: string) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null)
   const [top, setTop] = useState(0)
@@ -523,10 +590,10 @@ function TapeLedger({ base, symbol, selected, clock, revision, filterScope, filt
   const q = { ...filterScope, symbol, clock, selected: selected?.id }
   const exec = useResource<Page<ReplayRow>>(tab === 'executions' ? `${base}/executions?${params({ ...q, offset: first, limit: PAGE * 2 })}` : null, revision)
   const lives = useResource<Page<Life>>(tab === 'lifecycles' ? `${base}/lifecycles?${params({ symbol, clock, selected: selected?.id,
-    anchor: selected?.position as string | undefined, offset: first, excursions: excursions ? 1 : null })}` : null, revision)
+    anchor: selected?.position as string | undefined, complete: complete ? 1 : null, offset: first, excursions: excursions ? 1 : null })}` : null, revision)
   const page = tab === 'executions' ? exec?.value : lives?.value
   const counts = useRef({ total: 0, key: '' })
-  const key = symbol + tab + JSON.stringify(filters)
+  const key = symbol + tab + JSON.stringify(filterScope)
   if (counts.current.key !== key) counts.current = { total: 0, key }
   if (page) counts.current.total = page.total
   const total = page?.total ?? counts.current.total
@@ -572,6 +639,13 @@ function TapeLedger({ base, symbol, selected, clock, revision, filterScope, filt
     </div><span>{compact(total)} {tab === 'executions' ? 'fills' : 'lifecycles'}</span>
       {tab === 'lifecycles' && clock == null && !base.endsWith('/binance') && <button aria-pressed={excursions} onClick={() => setExcursions(!excursions)}>Mark excursions</button>}
       {tab === 'lifecycles' && clock == null && !base.endsWith('/binance') && <a href={`/api${base.replace('/replay/', '/explorer/')}/positions?${params({ symbol, format: 'csv' })}`}>CSV</a>}
+      {base.endsWith('/binance') && clock == null && <label className="replay-complete-filter">
+        <input type="checkbox" checked={complete} onChange={() => {
+          toggleComplete()
+          setTop(0)
+          if (scroller.current) scroller.current.scrollTop = 0
+        }} /> Complete lifecycles only
+      </label>}
       <button onClick={() => setOpen(!open)} aria-expanded={open}><Filter size={14}/> Filters</button></header>
     {open && <div className="replay-filters">
       <label>Execution type<select value={filters.action || ''} onChange={e => filter('action', e.target.value)}>
@@ -592,7 +666,7 @@ function TapeLedger({ base, symbol, selected, clock, revision, filterScope, filt
     <div ref={scroller} className="replay-ledger-scroll" style={{ height }} onScroll={e => setTop(e.currentTarget.scrollTop)}>
       <table key={tab}>
         <thead><tr>{(tab === 'executions' ? ['Time · UTC', 'Action', 'Side', 'Price', 'Quantity', 'Notional', 'After', 'Realized P&L']
-          : ['Position', 'Side', 'Entry · UTC', 'Exit · UTC', 'Peak USDT', 'P&L', 'MAE / MFE', 'Fills']).map(title => <th key={title}>{title}</th>)}</tr></thead>
+          : ['Position', 'Side', 'Entry · UTC', 'Exit · UTC', 'Peak USDT', 'P&L', base.endsWith('/binance') ? 'Completeness' : 'MAE / MFE', 'Fills']).map(title => <th key={title}>{title}</th>)}</tr></thead>
         <tbody>
           <tr className="spacer"><td colSpan={8} style={{ height: (first + relative) * ROW }} /></tr>
           {tab === 'executions' ? (rows as ReplayRow[]).map(row => <tr key={row.id} className={row.id === selected?.id ? 'selected' : ''}
@@ -601,11 +675,17 @@ function TapeLedger({ base, symbol, selected, clock, revision, filterScope, filt
             <td className={row.side === 'buy' ? 'gain' : 'loss'}>{row.side?.toUpperCase()}</td><td>{precise(row.price)}</td>
             <td>{precise(row.filled)}</td><td>{usd(row.filled_notional)}</td><td>{precise(row.after)}</td>
             <td>{usd(row.realized ?? row.reported_pnl)}</td></tr>)
-            : (rows as Life[]).map(row => <tr key={row.id} className={row.id === selected?.position ? 'selected' : ''} onClick={() => pickLife(row.id)}>
-              <td><button disabled={row.state === 'reported only'} title={row.provenance}
-                onClick={e => { e.stopPropagation(); pickLife(row.id) }}>{row.id}</button></td><td>{row.side}{row.state === 'reported only' ? ' · report' : ''}</td>
+            : (rows as Life[]).map(row => <tr key={row.id} className={row.id === selected?.position ? 'selected' : ''}>
+              <td><button disabled={row.completeness ? !row.first_execution_id : row.state === 'reported only'} title={row.provenance}
+                onClick={() => pickLife(row.id, row.first_execution_id)}>{row.id}</button></td><td>{row.side}</td>
               <td>{utc(row.entry_ms)}</td><td>{utc(row.exit_ms)}</td><td>{usd(row.max_notional)}</td>
-              <td>{usd(row.net_pnl ?? row.reported_pnl)}</td><td>{usd(row.mae)} / {usd(row.mfe)}</td><td>{row.executions ?? '—'}</td></tr>)}
+              <td>{usd(row.net_pnl ?? row.reported_pnl)}</td>
+              <td>{row.completeness ? <span className={row.completeness === 'complete' ? 'gain' : 'replay-warning'}
+                title={row.opening_status ? openingLabels[row.opening_status] : undefined}>{lifeLabels[row.completeness]}</span>
+                : base.endsWith('/binance') ? 'Unavailable' : `${usd(row.mae)} / ${usd(row.mfe)}`}</td>
+              <td>{row.executions ?? row.captured_executions ?? '-'}
+                {row.opening_execution_id && <button className="replay-opening-button" onClick={() => jumpOpening(row.id)}
+                  aria-label="Jump to position opening" title="Jump to position opening"><Crosshair size={13}/></button>}</td></tr>)}
           <tr className="spacer"><td colSpan={8} style={{ height: Math.max(0, total - first - relative - rows.length) * ROW }} /></tr>
         </tbody>
       </table>
