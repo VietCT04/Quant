@@ -1,5 +1,12 @@
 # Active-market inventory study | Binance portfolio 5140488422016171264
 
+## Focused action study · November 29, 2026
+
+- The [confirmed inventory action study](ACTION_FOCUS.md) uses 6,035 eligible executions and 120,316 verified no-order minutes. The [ADD](ACTION_ADD.md), [REDUCE](ACTION_REDUCE.md) and [REVERSE](ACTION_REVERSE.md) reports keep action classification and timing as separate questions. Each links complete positions with counterexamples for manual review.
+- **High confidence within the reconciled sample.** Recent action type and inventory state transfer substantially better across dates, symbols and lifecycles than unconditional class frequencies. Recent order size distinguishes small and large subsequent additions. The fitted price block gave no consistent gain. This leaves the private trigger and parent execution process unresolved.
+- **Moderate confidence for the pooled exposure interaction.** In the adverse previous-fill price band, 72/123 executions reversed when exposure was at most $25, versus 1/300 when it was at least $250. Reductions accounted for 232/300 of the larger-exposure orders. The split repeats on later dates, but sparse same-symbol overlap and the executed-order risk set limit its use as a timing rule.
+- **High confidence that both reversal paths exist.** Of 564 complete-path direct reversals, 213 followed at least three cuts and 177 flipped at least 75% of prior peak quantity without a preceding cut. Only three of the latter closed at least $250. An opposing clip large enough to consume remaining quantity is informative, but actual reversals seldom match the most recent trim size. Future work should compare new independently verified symbol-days and seek pre-trade book or parent-order evidence if it becomes public.
+
 Portfolio **富一次就足够**. Record sources are the [public Binance portfolio page](https://www.binance.com/en/copy-trading/lead-details/5140488422016171264) and its public history endpoints. All timestamps below are UTC. This is a study of a published trader record and independent simulated hypotheses.
 
 ## Collection and provenance
