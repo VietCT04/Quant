@@ -1,5 +1,12 @@
 # Active-market inventory study | Binance portfolio 5140488422016171264
 
+## Signed bursts and state transitions · November 29, 2026
+
+- In the [burst transition study](BURST_TRANSITIONS.md), the most reproducible directional market clue was a short adverse move before the first long ADD. In the marked minute panel its rate was 45/4,303 versus 103/28,475 overall, and the adverse move survived same-symbol matching. Short ADD and both first REDUCE hazards were elevated in both 15-second return tails. The market block did not consistently improve timing models on later dates and unseen symbols.
+- Shorts more than 100 bp underwater chose an opposing BUY rather than a renewed SELL in 67/95 qualifying post-pause executions, versus 137/249 overall. Matched cost displacement and the chronological fit supported this association. The unseen-symbol fit supplied weak evidence, and the immediate post-ADD comparison did not support a simple loss-triggered switch.
+- The frequency of same-side jumps from below $20 to at least $100 was higher after >30 seconds, especially for longs. Large jumps also occurred inside a run. Repeated fills at nearly identical prices weaken a strict nonzero grid spacing rule. Burst boundaries depend on chosen gap, and neither gaps nor order sides identify a private parent decision.
+- A held-out comparison of opposing clip sizes against current inventory substantially improved reversal discrimination, but overpredicted actual reversal counts on later dates. Mechanical crossing and context-dependent sizing can coexist. Keep future research on fresh matched symbol-days focused on the long ADD signal, inventory-conditioned short switches and clip calibration.
+
 ## Focused action study · November 29, 2026
 
 - The [confirmed inventory action study](ACTION_FOCUS.md) uses 6,035 eligible executions and 120,316 verified no-order minutes. The [ADD](ACTION_ADD.md), [REDUCE](ACTION_REDUCE.md) and [REVERSE](ACTION_REVERSE.md) reports keep action classification and timing as separate questions. Each links complete positions with counterexamples for manual review.
