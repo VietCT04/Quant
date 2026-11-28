@@ -19,6 +19,7 @@ from marketdata.state import writer_lock
 
 from . import control_handlers as handlers, control_store as store, experiment, requests, research
 from .explorer import Explorer
+from .replay_workspace import ReplayWorkspace
 from . import strategy
 
 LOG = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ class Service:
         self.root, self.path, self.source, self.port = root, database, source, port
         self.web_root = web_root
         self.explorer = Explorer(database, root, source)
+        self.replay_workspace = ReplayWorkspace(self.explorer)
         strategy.available()
         self.wake, self.stop, self.ready = Event(), Event(), Event()
         self.settings_lock = Lock()
@@ -476,9 +478,17 @@ def build_app(service):
             })
         return web.json_response(result, dumps=_json)
 
+    async def replay_workspace(request):
+        async with explorer_slots:
+            result = await asyncio.to_thread(
+                service.replay_workspace.request, request.match_info["source"], request.match_info["resource"], request.query,
+            )
+        return web.json_response(result, dumps=_json)
+
     app.add_routes([
         web.get("/", index), web.get("/api/snapshot", snapshot),
         web.get(r"/api/explorer/{job:[a-f0-9]{32}}/{resource}", explore),
+        web.get(r"/api/replay/{source:[a-f0-9]{32}|binance}/{resource}", replay_workspace),
         web.get("/api/strategies", strategies), web.get("/api/queue", queue), web.post("/api/hypotheses", submit), web.post("/api/campaigns", submit),
         web.get("/api/hypotheses/{key}", details), web.get("/api/hypotheses/{key}/results", details),
         web.post("/api/hypotheses/{key}/audit", audit),

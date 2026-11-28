@@ -1,91 +1,51 @@
-# Backtest Explorer
+# Symbol replay workstation
 
-Open a completed native candidate from **Alpha Results**, a hypothesis or candidate drawer, or **Research Inbox**. The Explorer also appears in the sidebar. The URL records the hypothesis, candidate, symbol, visible range, timeframe, overlays, selected position, and table filters.
+Open a completed native candidate from Alpha Results, a hypothesis, or the research inbox. The [native BTCUSDT walkthrough](http://127.0.0.1:8765/#explorer?hypothesis=H-0001&candidate=48b299ec64e74adc9f24d3315ea04bc3&symbol=BTCUSDT) and the [Binance public archive](http://127.0.0.1:8765/#explorer?source=binance&symbol=AKEUSDT) are live when the Control Center is running. The source selector switches between the two. Binance refresh reads the collector's SQLite archive through a read-only connection.
 
-## Inspect a position
+## Review a symbol
 
-1. Open **Positions**, select **Closed only**, and sort **Net realized** ascending to find the largest closed loss.
-2. Select the position ID. The chart selects its symbol, fits the holding window, and highlights its fills. The position detail opens with the execution timeline.
-3. Click an execution marker, a timeline event, or a row in the **Fills**, **Requested orders**, **Target changes**, **Funding**, or **Rejected orders** tabs. Each tab counts a different event type. **Previous trade** and **Next trade** navigate booked fills.
-4. Download the filtered position history as CSV. **Chart window** constrains the table to the visible range.
+1. Pick an instrument in the watchlist. Market volume is audited USDT quote turnover. Own volume is the sum of executed quantity times booked price. Counts and P&L use the selected historical reporting period. Dates are UTC. The coverage dot measures available five-second bars in that requested period.
+2. Select a booked fill on the chart or ledger. Arrows always point left and are green for BUY and red for SELL. The arrow tip uses the bucket coordinate of the actual booking clock and the price scale coordinate of the executed fill. This includes fills outside the visible candle's range. Dense labels yield to the selected label. Click overlapping heads to select a specific fill.
+3. Use the persistent transport to step execution, lifecycle or candle. Paste a UTC timestamp, an execution ID, or `position:<id>` in Jump. Next and Previous use a deterministic sort within the current symbol and never switch instruments. Use the keyboard reference for shortcuts.
+4. Change candle resolution manually. Execution navigation preserves the viewport when a marker is comfortably visible. **Center**, **Fit current position**, **Fit fills**, and **Reset viewport** are explicit. Fitting a long lifecycle may require selecting a coarser resolution. The three default panes are signed inventory, unrealized P&L, and cumulative realized P&L. Use **Panels** to toggle panes, switch marked/base inventory, and enable recorded overlays. Drag pane separators to resize.
+5. Use the positions tab for lifecycle results. **Mark excursions** samples native marks when requested. Available legacy position exports and raw order, funding, target, and rejection resources remain in the original Explorer API.
 
-Price and volume come from the audited five-second Parquet reader. Complete UTC aggregation buckets use first traded open, high, low, last published close, and summed verified volume. A bucket containing unavailable source data stays blank and retains its coverage status. Confirmed empty buckets have zero volume and no candle. Partial boundary buckets are omitted. A modeled fill can lie outside the trading candle range. Its timestamp and price stay fixed when the display timeframe changes.
+Candle resolution and display preferences persist locally. The URL retains the source, candidate, symbol, viewport and selected execution. Each symbol remembers its last inspected fill on this browser.
 
-## Execution clocks and accounting
+## Clocks and provenance
 
-V2 audit records use the modeled next-open timestamp. Order detail includes the native order ID, rounded quantity, requested notional and available buying power. END_OF_BACKTEST is an explicitly virtual closing fill with no following market bar. Terminal position results include that fill and its fees. Legacy records retain the clock semantics below.
+**Analysis** displays surrounding observations on both sides. **True replay** caps feature, candle, and execution output at the replay clock, including deterministic ordering within the same millisecond. An in-progress aggregate only uses audited five-second observations published by that clock. Later chart slots remain blank. A missing or quarantined input prevents a candle from representing the affected bucket.
 
-| Field | Meaning |
-|---|---|
-| Decision input bar start | Decision clock minus the native interval and availability lag. The order artifact does not distinguish a strategy signal from a risk override. |
-| Decision UTC | Recorded native decision timestamp |
-| Execution interval | Half-open aggregate-trade bar used for execution |
-| Booked fill UTC | Native booking timestamp after the execution interval and availability lag |
-| Modeled fill price | Actual modeled price. Rejected attempts use the recorded reference for their marker and show the fill price as unavailable. |
-| Requested versus actual | Requested signed USDT target, requested signed base quantity, filled quantity, and resulting signed quantity are reported separately. |
-| Reason | Code 0 means filled, 1 partial, 2 risk, and 3 lot, participation, or minimum notional. |
+Native fill prices include modeled execution costs. The native ledger distinguishes gross realized P&L from realized P&L net of booked fees and funding. The break-even overlay reflects allocated costs already booked in the current lifecycle and excludes hypothetical future closing costs. Virtual terminal exits remain explicitly labeled. MAE and MFE are sampled gross unrealized P&L using native marks and the fallback in the original settings.
 
-A lifecycle begins at a fill from flat and ends at flat or reversal. A reversal appears in both timelines. Fees and modeled slippage are allocated by closed and opened quantities. Native realized P&L belongs to the closed side. Funding on the same booking clock belongs to the position held before the fill, following native settlement order. The Explorer reconciles quantity, terminal average entry, gross realized P&L, fees, slippage, and funding with the native symbol report.
+External orders retain the exact reported timestamp, price, quantity, and P&L. An unmatched nonzero reported P&L indicates realized exposure but leaves the exact action unknown. Inventory is reconstructed only inside order intervals certified by the collector and reconciled to the published lifecycle quantities. A confirmed reversal appears as one booked order across the two lifecycle allocations. Where inventory is reconstructed and an audited candle is available, symbol valuation is an estimate at the available close. External fees, account equity, and funding remain unknown. External True Replay hides state inferred later from a published position summary. Reported cumulative P&L sums captured orders and has incomplete coverage wherever orders are missing.
 
-Table entry and exit prices are volume-weighted across the lifecycle's opening and closing fills. The execution detail displays the native running average entry. **Net realized** equals gross realized minus allocated fees plus funding. The native fill price already includes modeled spread, slippage, and impact. Return divides net realized plus terminal open P&L by total opening fill notional.
+## Replay artifacts and performance
 
-MFE and MAE are the highest and lowest **sampled gross unrealized P&L** at five-second post-fill snapshots. Official native mark inputs take precedence. A traded close serves as fallback when enabled in the recorded settings. Excursions and peak marked notional exclude stale carried marks. Coverage divides ticks with valid sampled marks by all scheduled post-fill held ticks. Terminal open P&L comes from the native report.
+**Generate detailed replay** uses the existing asynchronous audit workflow for summary-only native candidates. Completed replay artifacts attach through SSE and are reused. The workstation never reruns a simulation on open. Recorded registered-strategy features and reasons come from the frozen trace. Legacy indicators requiring incompatible sources are flagged, while existing fills and accounting remain available.
 
-## Feature and performance panes
-
-The Explorer evaluates the original registered feature graph using the native feed projection, original start, full symbol order, and SDK streaming feature evaluator. Each descriptor identifies its function, parameters, units, inputs, plot location, label, color, and provenance. Coarse buckets display their last native observations and retain the original bar and availability clocks. Missing features or incompatible original code are reported explicitly.
-
-Candles, features, symbol exposure, symbol P&L, and portfolio performance share a synchronized timeline. Requested target and native quantity and entry are displayed as booked steps when the window fits the exact-step budget. Symbol marked notional and P&L use the last native sample in each complete bucket and require a fresh mark when exposure is open. Portfolio equity, exposure, and recorded maximum drawdown come from the native equity artifact. Downsampling retains first, last, minimum, and maximum observations per metric and bucket.
-
-Registered strategies expose [audit-time observations](STRATEGY_AUTHORING.md) directly from their strategy trace. The Explorer uses their generic plot descriptors and shows a matched strategy rationale alongside the simulator reason. Exact booked targets and executions remain in the separate native ledgers.
-
-## Detailed replay
-
-Summary mode remains the default. **Generate detailed replay** queues one audit through the research service. The Explorer attaches committed detailed artifacts through existing SSE lifecycle updates. The same outcome appears in the Research Inbox. Repeated requests return the same receipt.
-
-Replay eligibility requires a verifiable clean original execution revision, matching trusted execution sources, SDK and simulator versions, effective settings, dataset fingerprint, and symbol order. The replay retains the original range, seed, features, candidate, and evaluation protocol. Audit logging and snapshot cadence are the intentional changes. Accounting and daily marked equity must match the original report before the artifacts attach. Older detailed artifacts can attach when their original recorded revisions, frozen specifications, and accounting agree.
-
-## API and limits
-
-Candidate-scoped routes start at **GET /api/explorer/{job}/{resource}**. Resources include **meta**, **candles**, **features**, **series**, **positions**, **fills**, **orders**, **targets**, **funding**, and **rejected**. Chart and series calls accept **symbol**, **start**, **end**, and **tf**. Use UTC epoch milliseconds. Ledger routes support offset and limit. The positions route also supports CSV.
-
-Candles use column projection and partition pruning. Responses are capped at 2,048 candle buckets, 500 rows per ledger page, and 500 visible markers per event type. Larger marker sets remain accessible through the paged ledger. Recent candle windows, feature windows, and symbol summaries are cached in-process. Lifecycle reconstruction has a 200,000-record budget per symbol and ledger stream. The feature evaluator caps on-demand native warm-up at 12 million cells. Very wide windows retain the portfolio pane and request zooming for symbol marks. Exposure is derived from native artifacts and the market feed on demand.
+The common read-only API is `GET /api/replay/{source}/{resource}`, with a native job ID or `binance` as the source. Resources include `meta`, `watch`, `window`, `navigate`, `executions`, and `lifecycles`. The window is limited to 2,000 candles. Execution pages are limited to 200 records. Most chart calls send only the buffered range around the viewport, and per-symbol tapes and market windows use bounded caches. A window with over 30,000 fills displays a density warning and exposes the remaining fills in the virtual ledger or at a closer zoom. Native artifact reconstruction retains the 200,000-row per-symbol bound.
 
 ## Verification
 
-```sh
-uv run pytest -q
-npm --prefix control-ui run build
-uv run python -m examples.explorer_check --out bench-data/explorer/verification.json
-node control-ui/tests/explorer.mjs http://127.0.0.1:8765 bench-data/explorer
+```powershell
+.venv/Scripts/python.exe -m pytest -q
+npm.cmd --prefix control-ui run build
+node control-ui/tests/replay-workstation.mjs http://127.0.0.1:8765 data/research/replay-workstation
 ```
 
-With the original H-0001 still recorded, use a fresh isolated registry to test a candidate with summary artifacts only.
+The browser suite uses H-0001 and the actual Binance archive. It checks rendered transaction-color pixels and round-trips the arrow tip through the chart coordinate converters. It also exercises overlapping candle executions, chronological navigation, position stepping, true replay, ledger virtualization, symbol switching, persisted timeframe and live archive refresh. The fixture tests perturb unobserved intrabar fields independently and check deterministic same-millisecond navigation.
 
-```sh
-uv run python -m examples.explorer_registry bench-data/explorer-replay/research.sqlite
-uv run quant service --home bench-data/explorer-replay --port 8772 start
-node control-ui/tests/explorer.mjs http://127.0.0.1:8772 bench-data/explorer-replay/browser
-uv run quant service --home bench-data/explorer-replay --port 8772 stop
-```
+| Windows loopback check | Measured result |
+| --- | ---: |
+| All 84 BTCUSDT fills traversed both ways | 166 navigation requests, 93 ms median, 169 ms p95 |
+| Native true-replay market window | 230 ms, 2.9 KB |
+| Binance watchlist, 372 symbols | 797 ms, 42 KB |
+| Last-fill seek, ZEREBROUSDT with 2,162 public executions | 102 ms, 14 ledger rows mounted after seeking |
+| Synthetic warm index, 200,000 rows | 626 ms to build with 97 MiB RSS increase, 17 ms for 1,000 indexed steps |
 
-The isolated browser test pauses dispatch, requests a replay, checks its queued receipt and duplicate identity, resumes dispatch, and observes completion via SSE. The production test uses H-0001 and its matching detailed replay. The verifier compares candles to the audited source, EMA samples to the SDK, fills to native Parquet, and lifecycle totals to the simulator report.
+The synthetic measurement covers the in-memory index without Parquet decoding, mark reads or browser transfer. Loopback latency includes the HTTP body and the record lookups, with OS cache state uncontrolled.
 
-### H-0001 measurements
+[Native replay screenshot](backtest-explorer/replay-native.png) · [Binance replay screenshot](backtest-explorer/replay-binance.png)
 
-The June 10–17, 2026 UTC BTCUSDT development run contained 120,960 five-second slots. It reconciled 84 fills, 82 reversals, 82 closed positions, one open position, and 20 funding records. The original H-0002 audit was reused in the owner registry. A replay in the isolated registry returned in 386 ms while dispatch was paused.
-
-The table reports loopback HTTP request and JSON transfer time on Windows with 16 logical CPUs, using three equal consecutive requests. The first request used an empty service cache for its response. OS file-cache state was uncontrolled. The service's sampled RSS rose from 212 MiB to a peak of 551 MiB during this verification run.
-
-| Seven-day BTCUSDT endpoint | First request | Repeated requests | Response |
-|---|---:|---:|---:|
-| 15m candles, 672 buckets | 284 ms | 29–40 ms | 95,117 bytes |
-| 15m feature series | 458 ms | 155–158 ms | 127,341 bytes |
-| Fills | 48 ms | 38–53 ms | 53,089 bytes |
-| Position lifecycles | 270 ms | 27 ms | 57,396 bytes |
-| Synchronized series | 406 ms | 411–425 ms | 499,683 bytes |
-
-- [Market chart and synchronized panes](backtest-explorer/market.png)
-- [Selected position and execution timeline](backtest-explorer/position.png)
-
-TradingView Lightweight Charts™ is a product of TradingView, Inc. [TradingView](https://www.tradingview.com/)
+TradingView Lightweight Charts is a product of TradingView, Inc. [TradingView](https://www.tradingview.com/)

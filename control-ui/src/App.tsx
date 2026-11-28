@@ -120,7 +120,7 @@ export default function App() {
     } catch (reason) { setFailure((reason as Error).message) }
   }
 
-  return <div className="shell">
+  return <div className={`shell ${page === 'explorer' ? 'replay-shell' : ''}`}>
     <aside className="sidebar">
       <a href="#overview" className="brand" onClick={() => navigate('overview')}><span className="brand-mark"><Waves size={23} strokeWidth={2.3} /></span><span><strong>Quant</strong><small>RESEARCH CONTROL</small></span></a>
       <div className="workspace"><span className="workspace-icon"><Activity size={15} /></span><span><strong>Local research</strong><small>Liquid 50 · Development</small></span></div>
