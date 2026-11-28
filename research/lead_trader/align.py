@@ -83,6 +83,7 @@ def completed_features(events, lo, status, values, lag):
     def gather(x, a):
         return x[np.clip(a, 0, len(x) - 1)]
 
+    out["observable_close"] = np.where(ready(i, i), gather(close, i), np.nan)
     for name, n in HORIZONS.items():
         previous = i - n
         ok = ready(previous, i)

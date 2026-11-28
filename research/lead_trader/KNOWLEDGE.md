@@ -75,3 +75,7 @@ H-0418 exactly matched H-0417's summary at −3.09 USDT, with 429 ordinary fills
 - High confidence in observed market-order classification, strongly skewed size distribution, and exact five-second price consistency where covered. Moderate confidence in the descriptive activity relationship, given paired and day-level checks and symbol concentration.
 - Low confidence in the source trader's private filters, sizing function, exact signal clock, margin allocation, use of order-book state and economic source of returns. The history feed was incomplete, and off-universe instruments make up most observations. The overlapping adds come overwhelmingly from one contract. Both account-level equity and all nontrading decisions are absent.
 - If one side fails, preserve that as evidence against the specific rule. Small clips incur the full per-fill execution costs. Adding a burst of correlated orders does not establish alpha. The reported trader P&L and hypothetical backtests describe different portfolios, costs, leverage and data coverage.
+
+## Later evidence | full local archive and independent market controls
+
+The [observable behavior study](BEHAVIOR_STUDY.md) freezes the extended archive and distinguishes asset selection, inventory actions, direct reversals, reported profit concentration, and market-only transfer. It retains the earlier findings and failed experiments above for comparison.
