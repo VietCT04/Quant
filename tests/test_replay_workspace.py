@@ -78,7 +78,7 @@ def test_external_archive_retains_individual_fills_and_hides_unknown_inventory(t
     with closing(sqlite3.connect(archive)) as db:
         db.executescript("""CREATE TABLE orders(id TEXT, ms INT, symbol TEXT, body TEXT);
             CREATE TABLE positions(symbol TEXT,body TEXT); CREATE TABLE tasks(kind TEXT, state TEXT,lo INT,hi INT);
-            CREATE TABLE pages(id INT);""")
+            CREATE TABLE pages(id INT,kind TEXT,body TEXT);""")
         for key, pnl in (("a", 0), ("b", 5)):
             body = dict(symbol="AUSDT", orderUpdateTime=100, orderTime=99, avgPrice=2.,
                         executedQty=3., side="SELL", totalPnl=pnl)
@@ -91,4 +91,21 @@ def test_external_archive_retains_individual_fills_and_hides_unknown_inventory(t
     assert [x["id"] for x in tape.rows] == ["a", "b"]
     assert [x["type"] for x in tape.rows] == ["unclassified", "realized"]
     assert all("before" not in r and "after" not in r for r in tape.rows)
+    assert tape.reconstruction["actions"] == {"unknown": 2}
+    symbol, lo, hi, step = "AUSDT", 0, 5_000, 5_000
+    window = reader.window("binance", None, None, tape, symbol, {"start": lo, "end": hi, "tf": "5s"},
+                           {"start": lo, "end": hi})
+    assert window["series"]["qty"] == [[0, None]]
+    with closing(sqlite3.connect(archive)) as db:
+        report = dict(positionId="123", index="1", symbol=symbol, side="Long", opened=90, closed=None,
+                      updateTime=105, maxOpenInterest=10., closedVolume=6., avgCost=1.5,
+                      status="Partially Closed")
+        db.execute("INSERT INTO positions VALUES (?,?)", (symbol, json.dumps(report)))
+        db.execute("INSERT INTO pages VALUES (1,'position',?)", (json.dumps({"data": {"list": [report]}}),))
+        db.commit()
+    refreshed = reader.external_tape(symbol, reader.archive_version())
+    assert refreshed.reconstruction["actions"] == {"inferred": 2}
+    assert refreshed.reconstruction["quantity"] == {"unknown": 2}
+    assert refreshed.rows[-1]["reported_pnl"] == 5
+    assert refreshed.page({"clock": 100, "selected": "b"})["rows"][-1]["type"] == "realized"
     assert tape.page({"clock": 100, "selected": "a"})["total"] == 1

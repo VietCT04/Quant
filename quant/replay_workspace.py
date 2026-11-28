@@ -1,7 +1,7 @@
 """Read-side symbol replay over booked native fills and the public order archive."""
 
 from bisect import bisect_left, bisect_right
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import closing
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -15,6 +15,7 @@ import polars as pl
 from . import data
 from .explorer import TIMEFRAMES, _compact, _extrema, _scan, _symbol
 from .explorer_ledger import execution, reconstruct
+from .public_inventory import Report, reconstruct_public
 from .validation import RESEARCH_START, RESEARCH_END
 
 
@@ -22,7 +23,7 @@ STEP = 5000
 MARKET = ("open", "high", "low", "close", "volume")
 PORTFOLIO = "5140488422016171264"
 ARCHIVE = Path(__file__).resolve().parents[1] / "data/research/lead-trader/collector/collector.sqlite"
-MARKER_FIELDS = ("id", "ms", "price", "side", "type", "filled_notional", "before", "after", "virtual", "position")
+MARKER_FIELDS = ("id", "ms", "price", "side", "type", "filled_notional", "before", "after", "virtual", "position", "direction", "action_certainty")
 MAX_BUCKETS = 2000
 
 
@@ -82,6 +83,7 @@ class SymbolTape:
     rows: list
     lives: list
     funding: list = field(default_factory=list)
+    reconstruction: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.times = [x["ms"] for x in self.rows]
@@ -216,7 +218,8 @@ class ReplayWorkspace:
     def archive_version(self):
         # A refresh can include an old backfill that does not move the latest timestamp.
         with closing(self.archive_db()) as db:
-            return tuple(db.execute("SELECT (SELECT count(*) FROM orders), (SELECT max(id) FROM pages)").fetchone())
+            return tuple(db.execute("""SELECT (SELECT count(*) FROM orders), (SELECT max(id) FROM pages),
+                (SELECT count(*) FROM tasks WHERE kind='order' AND state='complete')""").fetchone())
 
     @lru_cache(maxsize=2)
     def native_tape(self, job, detail_id, symbol):
@@ -236,8 +239,22 @@ class ReplayWorkspace:
         return SymbolTape(ledger, [position_fields(row) for row in positions], funding)
 
     @lru_cache(maxsize=2)
+    def position_snapshots(self, revision):
+        """Partial reports retained in raw pages survive later normalized upserts."""
+        snapshots = defaultdict(lambda: defaultdict(dict))
+        with closing(self.archive_db()) as db:
+            for body, in db.execute("SELECT body FROM pages WHERE kind='position' ORDER BY id"):
+                envelope = json.loads(body).get("data") or {}
+                for record in envelope.get("list") or []:
+                    if record.get("status") == "Partially Closed":
+                        key = f"{record['positionId']}:{record['index']}"
+                        state = Report.read(key, record)
+                        snapshots[record["symbol"]][key][state.end] = state
+        return {symbol: {key: tuple(states.values()) for key, states in histories.items()}
+                for symbol, histories in snapshots.items()}
+
+    @lru_cache(maxsize=8)
     def external_tape(self, symbol, revision):
-        del revision
         from research.lead_trader.summarize import lifecycles
 
         with closing(self.archive_db()) as db:
@@ -278,40 +295,18 @@ class ReplayWorkspace:
                                   reductions=path["reduces"], provenance="Reconstructed in verified order interval"))
         rows = []
         accum = 0.
-        for ix, ((key, _), order) in enumerate(zip(raw, order_records)):
+        for (key, _), order in zip(raw, order_records):
             price, qty = order["avgPrice"], order["executedQty"]
             sign = 1 if order["side"] == "BUY" else -1
             total = qty * price
             pnl = order.get("totalPnl")
             accum += pnl or 0.
-            legs = allocations[ix]
             row = dict(id=key, ms=order["orderUpdateTime"], decision=order["orderTime"], symbol_name=symbol,
                        price=price, filled=sign * qty, filled_notional=total, side=order["side"].lower(),
                        type="realized" if pnl else "unclassified", reported_pnl=pnl, reported_cumulative=accum,
                        provenance="Reported execution; inventory unknown", positions=[])
-            if len(legs) == 2 and math.isclose(sum(a[2]["size"] for a in legs), total, rel_tol=1e-7):
-                old, new = sorted(legs, key=lambda a: a[2]["action"] != "close")
-                if old[2]["action"] == "close" and new[2]["action"] == "open" and old[1] == -new[1]:
-                    before, after = old[1] * old[2]["size"] / price, new[1] * new[2]["size"] / price
-                    row.update(type="reversal", before=before, after=after, positions=[old[0], new[0]], position=new[0],
-                               provenance="Reported execution; both reversal quantities reconciled")
-            elif len(legs) == 1 and math.isclose(legs[0][2]["size"], total, rel_tol=1e-7):
-                pos, side, action, _ = legs[0]
-                after = side * (action["booked_notional"] / price if action["action"] != "close" else 0.)
-                before = after - sign * qty
-                direction = "long" if side > 0 else "short"
-                kind = {"open": f"{direction}_entry", "add": "scale_in", "reduce": "scale_out",
-                        "close": f"{direction}_exit"}[action["action"]]
-                displacement = action["from_cost_bps"]
-                cost = price / (1 + side * displacement / 10_000) if displacement is not None else None
-                new_cost = (abs(before) * cost + total) / abs(after) if kind == "scale_in" and cost is not None and after else (
-                    price if action["action"] == "open" else cost if after else None)
-                row.update(type=kind, before=before, after=after, direction=direction, position=pos, positions=[pos],
-                           entry_before=cost, entry_after=new_cost,
-                           provenance="Reported execution; inventory quantity reconciled")
-            if row.get("before") is not None:
-                row["before_notional"], row["after_notional"] = row["before"] * price, row["after"] * price
             rows.append(row)
+        report_issues = reconstruct_public(rows, lookup, coverage, allocations, self.position_snapshots(revision).get(symbol))
         confirmed = {p["id"] for p in lives}
         for key, report in lookup.items():
             if key in confirmed:
@@ -321,7 +316,23 @@ class ReplayWorkspace:
                           "exit_ms": closed, "state": "reported only", "duration_ms": closed - opened if closed else None,
                           "reported_pnl": report.get("closingPnl"),
                           "provenance": "Published position summary; execution path unavailable"})
-        return SymbolTape(rows, sorted(lives, key=lambda row: row["entry_ms"]))
+        reconstruction = {
+            "orders": len(rows), "actions": dict(Counter(row["action_certainty"] for row in rows)),
+            "action_types": dict(Counter(row["type"] for row in rows)),
+            "quantity": dict(Counter(row["quantity_certainty"] for row in rows)),
+            "entry": dict(Counter(row["entry_certainty"] for row in rows)),
+            "marked_at_fill": sum(row.get("entry_after") is not None for row in rows),
+            "inventory_duration_ms": sum(min(row["inventory_until"], rows[-1]["ms"] + 1) - row["ms"]
+                                         for row in rows if "inventory_until" in row),
+            "execution_span_ms": rows[-1]["ms"] - rows[0]["ms"] + 1 if rows else 0,
+            "certified_order_span_ms": sum(max(0, min(hi, rows[-1]["ms"] + 1) - max(lo, rows[0]["ms"]))
+                                           for lo, hi in coverage) if rows else 0,
+            "action_issues": dict(Counter(row["action_evidence"] for row in rows if row["action_certainty"] == "unknown")),
+            "inventory_issues": dict(Counter(row["inventory_issue"] for row in rows if "inventory_issue" in row and "after" not in row)),
+            "report_issues": dict(report_issues),
+            "legacy_paths": len(confirmed),
+        }
+        return SymbolTape(rows, sorted(lives, key=lambda row: row["entry_ms"]), reconstruction=reconstruction)
 
     @lru_cache(maxsize=2)
     def external_meta(self, revision):
@@ -472,7 +483,7 @@ class ReplayWorkspace:
                     features = features | {"series": {k: [p for p in values if len(p) > 3 and p[3] is not None and p[3] <= through]
                                                         for k, values in features["series"].items()}}
         return {"candles": candles, "markers": markers, "marker_total": max(0, right - left), "series": series,
-                "features": features}
+                "features": features, "reconstruction": tape.reconstruction if through is None else {}}
 
     def symbol_series(self, job, original, detail, tape, symbol, candles, through, selected, q):
         points = {k: [] for k in ("qty", "notional", "entry", "initial", "breakeven", "unrealized", "realized", "net", "funding")}
@@ -500,13 +511,14 @@ class ReplayWorkspace:
             event = tape.rows[i] if i >= 0 else {}
             life = tape.positions.get(event.get("position"), {})
             qty = event.get("after", 0. if native and detail and not event else None)
-            if not native and (through is not None or (qty is not None and (not life or clock > life.get("exit_ms", 0)))):
+            if not native and (through is not None or clock >= event.get("inventory_until", -1)):
                 qty = None
             entry = event.get("entry_after") if qty else None
             mark = native_marks.get(stamp) if native else candle.get("close")
             notional = qty * mark if qty is not None and mark is not None else 0. if qty == 0 else None
             unrealized = qty * (mark - entry) if qty is not None and entry is not None and mark is not None else 0. if qty == 0 else None
-            initial = tape.rows[tape.first[life["id"]]]["price"] if qty and life.get("id") in tape.first else None
+            first = tape.rows[tape.first[life["id"]]] if qty and life.get("id") in tape.first else {}
+            initial = first.get("price") if native or abs(first.get("ms", -1) - life.get("entry_ms", 0)) <= 1 else None
             cash = tape.cash_totals[bisect_right(tape.cash_times, clock)] if native and detail else None
             net = event.get("net_cumulative", 0.) + cash - event.get("funding_cumulative", 0.) if cash is not None else None
             values = (qty, notional, entry, initial, event.get("breakeven"), unrealized,
@@ -542,6 +554,19 @@ class ReplayWorkspace:
             series = [[lo, initial], *[[row["ms"], row.get(key)] for row in raw]]
             series.append([hi, series[-1][1]])
             points[field + "_events"] = series
+        if not native and through is None:
+            for field, value in (("qty", "after"), ("entry", "entry_after")):
+                known = {}
+                for row in ([prior] if prior else []) + raw:
+                    until = row.get("inventory_until", -1)
+                    if until <= lo or row.get(value) is None:
+                        continue
+                    known[max(lo, row["ms"])] = row[value]
+                    if until <= hi:
+                        known[until] = None
+                points[field + "_events"] = sorted([t, v] for t, v in known.items())
+            marks = {row["ms"] // step * step: row["unrealized"] for row in raw if row.get("entry_after") is not None}
+            points["unrealized_at_fill"] = [[t, value] for t, value in marks.items()]
         if q.get("connections") == "1":
             connected = defaultdict(dict)
             for row in raw:
@@ -597,6 +622,8 @@ class ReplayWorkspace:
             raise ValueError("Generate a detailed replay to inspect individual native fills")
         tape = self.external_tape(symbol, revision) if job == "binance" else (
             self.native_tape(job, detailed["id"], symbol) if detailed else SymbolTape([], []))
+        if resource == "reconstruction":
+            return tape.reconstruction if job == "binance" and "clock" not in q else {}
         if resource == "navigate":
             row = tape.navigate(q)
             selected = row["row"]

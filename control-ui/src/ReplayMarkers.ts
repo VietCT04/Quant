@@ -9,12 +9,14 @@ export const signalColor = (row: Execution) => row.side === 'buy' ? BUY : SELL
 
 export function actionName(row: Execution) {
   const side = row.type === 'scale_out' || row.type === 'terminal_close' ? row.before : row.after
-  const direction = typeof side === 'number' ? side < 0 ? 'SHORT' : 'LONG' : ''
+  const direction = typeof side === 'number' && side !== 0 ? side < 0 ? 'SHORT' : 'LONG'
+    : typeof row.direction === 'string' ? row.direction.toUpperCase() : ''
+  const transaction = row.side?.toUpperCase() || 'SIDE UNAVAILABLE'
   return ({
     long_entry: 'OPEN LONG', short_entry: 'OPEN SHORT', long_exit: 'CLOSE LONG', short_exit: 'CLOSE SHORT',
     scale_in: `ADD ${direction}`, scale_out: `REDUCE ${direction}`, reversal: 'REVERSE',
-    terminal_close: `VIRTUAL CLOSE ${direction}`, realized: 'REALIZED', unclassified: 'FILL',
-  })[row.type || ''] || 'FILL'
+    terminal_close: `VIRTUAL CLOSE ${direction}`, realized: transaction, unclassified: transaction,
+  })[row.type || ''] || transaction
 }
 
 export const markerLabel = (row: Execution) => actionName(row) + (typeof row.filled_notional === 'number'

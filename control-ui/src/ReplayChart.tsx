@@ -7,7 +7,12 @@ import { ReplayMarkers, BUY, SELL, actionName, bucket, chartTime, markerLabel } 
 import { ReplaySteps } from './ReplaySteps'
 import { utc, type Candle, type Candles, type Execution, type Features, type Points, type Window } from './explorerTypes'
 
-export type ReplayWindow = { candles: Candles; markers: Execution[]; marker_total: number; series: Points; features: Features & { error?: string } }
+export type Reconstruction = {
+  orders: number; actions: Record<string, number>; quantity: Record<string, number>;
+  entry: Record<string, number>; inventory_duration_ms: number; execution_span_ms: number;
+  action_issues: Record<string, number>; inventory_issues: Record<string, number>;
+}
+export type ReplayWindow = { candles: Candles; markers: Execution[]; marker_total: number; series: Points; features: Features & { error?: string }; reconstruction?: Reconstruction }
 export type PanelId = 'inventory' | 'unrealized' | 'realized' | 'signals' | 'equity' | 'funding'
 export type ChartPrefs = {
   light: boolean; log: boolean; labels: boolean; volume: boolean; marked: boolean; net: boolean; entry: boolean;
@@ -18,7 +23,7 @@ type Props = {
   onPick: (id: string) => void; onWindow: (view: Window) => void; onSizes: (items: ChartPrefs['heights']) => void
 }
 type PaneLine = ISeriesApi<'Line'> | ISeriesApi<'Baseline'>
-type Plot = { key: string; pane: PanelId; label: string; color: string; step?: boolean; baseline?: boolean }
+type Plot = { key: string; pane: PanelId; label: string; color: string; step?: boolean; baseline?: boolean; dots?: boolean }
 type Runtime = {
   chart: IChartApi; price: ISeriesApi<'Candlestick'>; volume: ISeriesApi<'Histogram'>
   anchor: ISeriesApi<'Line'>; markers: ReplayMarkers
@@ -187,11 +192,15 @@ export function ReplayChart(props: Props) {
       { key: options.marked ? 'notional' : 'qty', pane: 'inventory', label: options.marked ? 'Signed inventory · marked USDT' : 'Signed inventory · base',
         color: '#6d9deb', step: !options.marked },
       { key: 'unrealized', pane: 'unrealized', label: 'Unrealized P&L · USDT', color: BUY, baseline: true },
-      { key: options.net ? 'net' : 'realized', pane: 'realized', label: options.net ? 'Cumulative realized · net USDT' : 'Cumulative realized / reported · USDT',
+      { key: options.net ? 'net' : 'realized', pane: 'realized', label: options.net ? 'Cumulative realized · net USDT' : 'Cumulative realized / archived order P&L · USDT',
         color: '#c4a8fb', step: true },
       { key: 'equity', pane: 'equity', label: 'Account equity · USDT', color: '#87aaf5' },
       { key: 'funding', pane: 'funding', label: 'Cumulative funding · USDT', color: '#e0bd7e', step: true },
     ]
+    if (data?.series.unrealized_at_fill?.length) plots.push({
+      key: 'unrealized_at_fill', pane: 'unrealized', label: 'Unrealized P&L · line: market mark · dot: fill price',
+      color: '#a0dfcc', dots: true,
+    })
     const features = data?.features.features || []
     for (const item of features) if (item.pane === 'signal') plots.push({ key: item.name, pane: 'signals', label: 'Strategy signals', color: item.color })
     const combined = { ...data?.series, ...data?.features.series }
@@ -227,7 +236,9 @@ export function ReplayChart(props: Props) {
         panel = { pane, title }
         instance.panes.set(plot.pane, panel)
       }
-      panel.title.textContent = plot.label + (combined[plot.key]?.some(row => row[1] != null) ? '' : ' · unavailable')
+      const hasValues = combined[plot.key]?.some(row => row[1] != null) ||
+        combined[plot.key + '_events']?.some(row => row[1] != null)
+      panel.title.textContent = plot.label + (hasValues ? '' : ' · unavailable')
       let line = instance.lines.get(plot.key)
       if (!line) {
         const common = { priceLineVisible: false, lastValueVisible: false, lineWidth: 1 as const }
@@ -235,8 +246,9 @@ export function ReplayChart(props: Props) {
           baseValue: { type: 'price', price: 0 }, topLineColor: BUY, topFillColor1: '#17ae8936',
           topFillColor2: '#17ae8908', bottomLineColor: SELL, bottomFillColor1: '#ed596c08', bottomFillColor2: '#ed596c36',
         }, panel.pane.paneIndex()) : chart.addSeries(LineSeries, { ...common, color: plot.color,
-          lineType: plot.step ? LineType.WithSteps : LineType.Simple }, panel.pane.paneIndex())
-        if (plot.pane !== 'signals' && plot.pane !== 'equity') line.createPriceLine({
+          lineType: plot.step ? LineType.WithSteps : LineType.Simple,
+          lineVisible: !plot.dots, pointMarkersVisible: Boolean(plot.dots), pointMarkersRadius: 2 }, panel.pane.paneIndex())
+        if (plot.pane !== 'signals' && plot.pane !== 'equity' && !plot.dots) line.createPriceLine({
           price: 0, color: '#60748975', lineWidth: 1, lineStyle: 2, axisLabelVisible: false,
         })
         instance.lines.set(plot.key, line)

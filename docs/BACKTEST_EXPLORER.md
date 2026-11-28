@@ -18,7 +18,45 @@ Candle resolution and display preferences persist locally. The URL retains the s
 
 Native fill prices include modeled execution costs. The native ledger distinguishes gross realized P&L from realized P&L net of booked fees and funding. The break-even overlay reflects allocated costs already booked in the current lifecycle and excludes hypothetical future closing costs. Virtual terminal exits remain explicitly labeled. MAE and MFE are sampled gross unrealized P&L using native marks and the fallback in the original settings.
 
-External orders retain the exact reported timestamp, price, quantity, and P&L. An unmatched nonzero reported P&L indicates realized exposure but leaves the exact action unknown. Inventory is reconstructed only inside order intervals certified by the collector and reconciled to the published lifecycle quantities. A confirmed reversal appears as one booked order across the two lifecycle allocations. Where inventory is reconstructed and an audited candle is available, symbol valuation is an estimate at the available close. External fees, account equity, and funding remain unknown. External True Replay hides state inferred later from a published position summary. Reported cumulative P&L sums captured orders and has incomplete coverage wherever orders are missing.
+External markers preserve the reported transaction side and booked price. Action confidence, signed quantity confidence, and average entry confidence are tracked independently. Unresolved markers use BUY or SELL with executed USDT notional. The inspector displays reported realized P&L separately. An order can realize P&L on the outgoing leg of a reversal, and a closing fill can report zero P&L.
+
+### Public inventory reconstruction
+
+The Explorer associates direction-consistent fills with published position intervals. A unique opposite-side opening and closing boundary can identify a reversal. A reconciled quantity for either leg can allocate the other leg of that same order. Both lifecycle allocations share one marker. Interior fills can be classified when the associated lifecycle is only partially covered.
+
+The inventory line connects signed quantities within collector-certified order windows and stops at gaps, ambiguous fill ordering or the end of available position evidence. Quantity can be reconstructed forward from an opening, backward from a closing, or from an independently reconciled reversal. A rising historical peak between retained partial snapshots can establish a quantity checkpoint when the change in closed volume also reconciles. Public snapshots in this archive provide peak and closed volume, without a direct current quantity. When cost information is sufficiently consistent across independent additions, it can corroborate an inferred starting quantity at the observed precision. The solver rejects inconsistent checkpoints and never carries inferred inventory through an unverified gap.
+
+**Confirmed** means the archived quantities reconcile with independent public evidence. **Inferred** identifies a supported action or state with unresolved assumptions. **Unknown** leaves the value blank. These labels describe evidence within the public archive. Binance does not expose the private account ledger here.
+
+Unrealized P&L uses audited candle closes where available. Dots indicate the latest supported fill-price mark per chart bucket, with the exact selected fill mark in the inspector. The dots remain independent across missing candle intervals. External fees, funding and account equity remain unknown. Cumulative reported P&L sums captured orders, so gaps can make it incomplete. True Replay hides labels and state that depend on position summaries published later.
+
+Click the coverage count beneath the chart for a symbol's confidence levels and failure reasons. Refresh reads the latest collector revision and keeps the active symbol and selected execution. The same counts are available at `GET /api/replay/binance/reconstruction?symbol=BTWUSDT`.
+
+### Reconstruction audit
+
+A frozen archive snapshot contained 21,791 orders across 246 symbols and 9,993 position summaries. The orders span November 20 through November 28, 2026 UTC. The prior implementation at `c57dbab` required a fully closed lifecycle, unique boundary fills, verified coverage for the entire path, and exact reconciliation to peak and closed volume. This left 18,282 orders without a position action. It also discarded a reversal when the quantity of only one leg was independently available.
+
+| Symbol | Orders | Prior classified | Now classified | Quantity at fill | Inventory time coverage |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BTWUSDT | 704 | 4 | 704 | 500 | 51.8% |
+| ZEREBROUSDT | 3,396 | 0 | 3,396 | 0 | 0.0% |
+| EVAAUSDT | 1,595 | 463 | 1,595 | 944 | 47.7% |
+| CCUSDT | 1,327 | 0 | 1,327 | 1,190 | 52.8% |
+| FLUXUSDT | 804 | 0 | 804 | 737 | 58.3% |
+| ACEUSDT | 557 | 114 | 557 | 536 | 62.9% |
+| FLOCKUSDT | 464 | 117 | 464 | 442 | 21.6% |
+| All 246 symbols | 21,791 | 3,509 | 21,689 | 10,456 | |
+
+Inventory time coverage divides the length of inventoried segments by the time from the first to the last archived order for the symbol. It may differ substantially from coverage measured per fill. Across the sample, 3,676 actions were confirmed, 18,013 inferred and 102 unknown. Of 11,335 fills with unknown quantity, 7,741 had inconsistent weighted-cost evidence, 2,506 fell outside verified order intervals, 812 lacked an independent checkpoint, 180 lacked a usable position link, 82 conflicted with reported closed volume and 14 had ambiguous same-millisecond ordering.
+
+BTWUSDT had 620 reductions, 82 additions and two reversals. Its 204 unknown quantities came from 113 inconsistent cost observations, 87 fills outside verified order intervals, two missing checkpoints and two same-millisecond fills. On ZEREBROUSDT, 3,104 fills had inconsistent cost checks and 292 were outside verified intervals. On old reconciled paths, only 1,382 of 2,091 sampled reduction and closure records reproduced reported order P&L within the audit tolerance. This rules out treating every reported P&L value as a standalone weighted-entry checkpoint.
+
+To regenerate per-symbol counts from an archive or snapshot, run:
+
+```powershell
+.venv/Scripts/python.exe -m research.lead_trader.reconstruction_audit --out data/research/lead-trader/reconstruction.json
+node control-ui/tests/public-reconstruction.mjs
+```
 
 ## Replay artifacts and performance
 

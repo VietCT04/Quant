@@ -388,6 +388,20 @@ export function ReplayDesk({ meta, refresh }: { meta: ReplayMeta; refresh: () =>
           {!!chartData && chartData.marker_total > chartData.markers.length && <span className="replay-warning">Dense window · zoom for remaining fills</span>}
           {!isExternal && <span>Audited five-second market data</span>}
           {isExternal && <span className={coveredWindow ? '' : 'replay-warning'}>{coveredWindow ? 'Order window verified' : 'Public order gaps possible'}</span>}
+          {isExternal && !!chartData?.reconstruction?.orders && (() => {
+            const info = chartData.reconstruction
+            const unknown = (counts: Record<string, number>) => counts.unknown || 0
+            const details = [
+              `Actions: ${info.actions.confirmed || 0} confirmed · ${info.actions.inferred || 0} inferred · ${unknown(info.actions)} unknown`,
+              `Inventory: ${info.quantity.confirmed || 0} confirmed · ${info.quantity.inferred || 0} inferred · ${unknown(info.quantity)} unknown`,
+              ...Object.entries(info.action_issues).map(([reason, count]) => `${reason}: ${count} fills`),
+              ...Object.entries(info.inventory_issues).map(([reason, count]) => `${reason}: ${count} fills`),
+            ]
+            return <details className="replay-coverage">
+              <summary data-testid="reconstruction-coverage">Actions {info.orders - unknown(info.actions)}/{info.orders} · Inventory {info.orders - unknown(info.quantity)}/{info.orders}</summary>
+              <div>{details.map(value => <div key={value}>{value}</div>)}</div>
+            </details>
+          })()}
           {chartData?.features.error && <span className="replay-warning" title={chartData.features.error}>Features unavailable</span>}
         </div>
         <div className="replay-transport" aria-label="Replay navigation">
@@ -449,6 +463,7 @@ function buffered(view: Window, meta: Window, step: number): Window {
 function Inspector({ selected: row, symbol, isExternal }: { selected?: ReplayRow; symbol: string; isExternal: boolean }) {
   const numeric = (k: string) => typeof row?.[k] === 'number' ? Number(row[k]) : undefined
   const info = row?.position_info
+  const certainty = (k: string) => { const value = String(row?.[k] || 'unknown'); return value[0].toUpperCase() + value.slice(1) }
   const observations = row?.observations as unknown as Record<string, number> | undefined
   const fields: [string, ReactNode][] = row ? [
     ['Execution ID', <code title={row.id}>{row.id}</code>], ['Lifecycle', row.position as string || '—'],
@@ -458,7 +473,13 @@ function Inspector({ selected: row, symbol, isExternal }: { selected?: ReplayRow
     ['USDT at fill before → after', `${usd(row.before_notional)} → ${usd(row.after_notional)}`],
     ['Average entry before → after', `${precise(row.entry_before)} → ${precise(row.entry_after)}`],
     [isExternal ? 'Reported order P&L' : 'Fill realized · gross', usd(isExternal ? row.reported_pnl : row.realized)],
-    ['Unrealized at fill', usd(row.unrealized)],
+    [isExternal ? 'Unrealized · marked at fill price' : 'Unrealized at fill', usd(row.unrealized)],
+    ...(isExternal ? [
+      ['Action confidence', certainty('action_certainty')],
+      ['Inventory confidence', certainty('quantity_certainty')],
+      ['Average entry confidence', certainty('entry_certainty')],
+      ...(row.realizing_direction ? [['Reported P&L relates to', String(row.realizing_direction) + ' exposure']] : []),
+    ] as [string, ReactNode][] : []),
     [isExternal ? 'Reported P&L · archived orders' : 'Cumulative realized · gross', usd(isExternal ? row.reported_cumulative : row.gross_cumulative)],
     ['Cumulative realized · net', usd(row.net_cumulative)], ['Fee on fill', usd(row.fee)],
     ['Cumulative funding · symbol', usd(row.funding_cumulative)],
@@ -477,7 +498,9 @@ function Inspector({ selected: row, symbol, isExternal }: { selected?: ReplayRow
         {observations && <details><summary>Recorded features</summary>
           {Object.entries(observations).map(([name, value]) => <p key={name}>{name} {precise(value)}</p>)}
         </details>}
-        <small>{row.provenance as string}</small>
+        <small>{(row.action_evidence || row.provenance) as string}</small>
+        {isExternal && !!(row.quantity_evidence || row.inventory_issue) && <p className="muted">{(row.quantity_evidence || row.inventory_issue) as string}</p>}
+        {isExternal && !!row.entry_evidence && <p className="muted">{row.entry_evidence as string}</p>}
       </div>
     </> : <p className="replay-inspector-empty">Select a marker or ledger row to inspect a fill.</p>}
   </aside>
@@ -553,7 +576,7 @@ function TapeLedger({ base, symbol, selected, clock, revision, filterScope, filt
     {open && <div className="replay-filters">
       <label>Execution type<select value={filters.action || ''} onChange={e => filter('action', e.target.value)}>
         <option value="">All actions</option>{Object.entries({ long_entry: 'Open long', short_entry: 'Open short', scale_in: 'Add', scale_out: 'Reduce',
-          long_exit: 'Close long', short_exit: 'Close short', reversal: 'Reverse', terminal_close: 'Virtual close', realized: 'Reported P&L', unclassified: 'Unclassified' })
+          long_exit: 'Close long', short_exit: 'Close short', reversal: 'Reverse', terminal_close: 'Virtual close', realized: 'Unknown action · reported P&L', unclassified: 'Unknown action' })
           .map(([v, label]) => <option value={v} key={v}>{label}</option>)}</select></label>
       <label>Direction<select disabled={clock != null} value={filters.direction || ''} onChange={e => filter('direction', e.target.value)}>
         <option value="">Both</option><option value="long">Long</option><option value="short">Short</option></select></label>
