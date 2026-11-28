@@ -16,7 +16,7 @@ BAR = 5_000
 DAY = 86_400_000
 START, END = map(as_millis, ("2024-11-25", "2026-11-25"))
 HORIZONS = {"15s": 3, "1m": 12, "5m": 60, "15m": 180, "1h": 720, "4h": 2880}
-FIELDS = ("open", "high", "low", "close", "quote_volume", "buy_quote_volume")
+FIELDS = ("open", "high", "low", "close", "quote_volume", "buy_quote_volume", "trade_count")
 
 
 def rows(path):
@@ -100,6 +100,23 @@ def completed_features(events, lo, status, values, lag):
         out[f"activity_{name}"] = np.divide(vol * 720 / n, earlier, out=np.full(len(i), np.nan),
                                             where=ok & ready(previous - 720, previous) & (earlier > 0))
         out[f"vol_{name}"] = np.where(ok, np.sqrt(np.maximum(0., squared)), np.nan)
+    # Additional causal microstructure features used by the inverse decision study.
+    valid5 = ready(i - 59, i)
+    high = pl.Series(np.where(valid, values["high"], np.nan)).fill_nan(None).rolling_max(60).to_numpy()
+    low = pl.Series(np.where(valid, values["low"], np.nan)).fill_nan(None).rolling_min(60).to_numpy()
+    out["range_rebound5m"] = np.where(valid5 & (gather(low,i)>0), gather(close,i)/gather(low,i)-1, np.nan)
+    out["range_drawdown5m"] = np.where(valid5 & (gather(high,i)>0), gather(close,i)/gather(high,i)-1, np.nan)
+    prior = np.where(ready(i-24,i), gather(close,i-12)/gather(close,i-24)-1, np.nan)
+    out["acceleration_1m"] = out["ret_1m"]-prior
+    if "trade_count" in values:
+        counts = prefix(np.nan_to_num(values["trade_count"]))
+        now = gather(counts,i+1)-gather(counts,i-11)
+        before = gather(counts,i-11)-gather(counts,i-23)
+        base = gather(counts,i-11)-gather(counts,i-731)
+        out["trade_accel1m"] = np.divide(now,before,out=np.full(len(i),np.nan),
+                                         where=ready(i-23,i)&(before>0))
+        out["trade_intensity1m"] = np.divide(now*60,base,out=np.full(len(i),np.nan),
+                                              where=ready(i-731,i)&(base>0))
     contemporaneous = (exact >= 0) & (exact < len(close)) & (gather(status, exact) == q.data.TRADED)
     for key in ("high", "low", "quote_volume"):
         out[f"event_{key}"] = np.where(contemporaneous, gather(values[key], exact), np.nan)

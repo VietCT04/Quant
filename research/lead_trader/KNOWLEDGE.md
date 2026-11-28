@@ -79,3 +79,7 @@ H-0418 exactly matched H-0417's summary at −3.09 USDT, with 429 ordinary fills
 ## Later evidence | full local archive and independent market controls
 
 The [observable behavior study](BEHAVIOR_STUDY.md) freezes the extended archive and distinguishes asset selection, inventory actions, direct reversals, reported profit concentration, and market-only transfer. It retains the earlier findings and failed experiments above for comparison.
+
+## Inverse decision modeling | current trader-research direction
+
+The [inverse decision study](INVERSE_DECISIONS.md) separates the eligibility and outcomes of watchlist activation, reported entry side, verified holding and inventory changes, and order size. Market ranks predict symbol activation, while prior trading and booked state carry most of the transferable inventory information. The earlier four-hour rebound remains in the behavior study as a separate market finding.

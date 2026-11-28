@@ -31,17 +31,21 @@ def lag(x, n):
     return np.r_[np.full(min(n,len(x)), np.nan), x[:-n]]
 
 
-def market(folder):
+def market(folder, extra=None):
     meta = json.loads((folder / "roster.json").read_text(encoding="utf-8"))
-    paths = sorted(folder.glob("*.parquet"))
-    symbols = [p.stem for p in paths]
+    paths = {p.stem:p for p in folder.glob("*.parquet")}
+    if extra is not None:
+        for p in extra.glob("*.parquet"):
+            paths.setdefault(p.stem,p)
+    symbols = sorted(paths)
     origin = meta.get("start_ms", ORIGIN)
     n = (meta["cutoff_ms"] - origin) // HOUR
     fields = ("open", "close", "quote", "trades", "buy_quote")
     raw = {k: np.full((len(paths), n), np.nan, dtype="f8") for k in fields}
     age = np.full((len(paths), n), np.nan, dtype="f4")
     listings = {r["symbol"]: r["onboardDate"] for r in meta["exchange_info"]["symbols"] if r.get("onboardDate")}
-    for j, path in enumerate(paths):
+    for j, symbol in enumerate(symbols):
+        path=paths[symbol]
         table = pl.read_parquet(path, columns=["ms", *fields])
         t = (table["ms"].to_numpy() - origin) // HOUR
         if t.size != np.unique(t).size:
